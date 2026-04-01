@@ -268,22 +268,22 @@ async function seedData() {
       'Scoring mission: Evaluate session submissions on their relevance, technical depth, and strategic value to federal/defense audiences. Intel\'s federal priorities for 2026 center on AI for national security, edge computing at the tactical edge, data center modernization for classified workloads, and silicon-level trust/security.',
       '',
       'Score each submission on six dimensions (0-100 each):',
-      '1. Federal Relevance — Does this directly address federal/defense/IC use cases, mission requirements, or procurement concerns?',
-      '2. Technical Depth — Is the content substantive enough for technical buyers and architects in cleared environments?',
-      '3. Intel Alignment — Does it showcase Intel silicon, software, or ecosystem advantages meaningfully?',
-      '4. Audience Fit — Is the content level and framing appropriate for GS-13+, SES, and senior program managers?',
-      '5. Innovation Signal — Does it present genuinely new capabilities, architectures, or approaches vs. known baselines?',
-      '6. Delivery Readiness — Are the speakers credible, is the format appropriate, and is the abstract clear enough to attract the right attendees?',
+      '1. Audience Fit — Is the content level, framing, and subject matter appropriate for the specific audience defined by this event?',
+      '2. Intel Alignment — Does it showcase Intel silicon, software, or ecosystem advantages in a meaningful and credible way?',
+      '3. Technical Depth — Is the content substantive enough for the technical buyers, architects, and decision-makers this event targets?',
+      '4. Strategic Value — Does the session advance Intel\'s key goals for this event — pipeline, preference, trust, or thought leadership?',
+      '5. Partner Ecosystem Value — Does it include customer, partner, or third-party voices that add credibility and real-world validation?',
+      '6. Delivery Readiness — Are the speakers confirmed and credible, the format appropriate, and the abstract clear enough to attract the right attendees?',
       '',
       'Return ONLY valid JSON in this exact shape:',
       '{',
       '  "overall": <integer 0-100>,',
       '  "dimensions": {',
-      '    "federal_relevance": { "score": <int>, "rationale": "<string>" },',
-      '    "technical_depth": { "score": <int>, "rationale": "<string>" },',
-      '    "intel_alignment": { "score": <int>, "rationale": "<string>" },',
       '    "audience_fit": { "score": <int>, "rationale": "<string>" },',
-      '    "innovation_signal": { "score": <int>, "rationale": "<string>" },',
+      '    "intel_alignment": { "score": <int>, "rationale": "<string>" },',
+      '    "technical_depth": { "score": <int>, "rationale": "<string>" },',
+      '    "strategic_value": { "score": <int>, "rationale": "<string>" },',
+      '    "partner_ecosystem_value": { "score": <int>, "rationale": "<string>" },',
       '    "delivery_readiness": { "score": <int>, "rationale": "<string>" }',
       '  },',
       '  "strengths": ["<string>", ...],',
@@ -383,7 +383,7 @@ app.post('/api/events/generate-profile', async function (req, res) {
   try {
     var context_raw = req.body.context_raw;
     if (!context_raw) return res.status(400).json({ ok: false, error: 'context_raw is required.' });
-    var systemPrompt = 'You are an expert assistant for creating event content strategies. Given raw context about an event, generate two things: (1) a concise context_profile summarizing the event focus, audience, and key themes for content submitters, and (2) a detailed ai_system_prompt for an AI that will score session submissions. The ai_system_prompt must instruct the AI to score on six dimensions: federal_relevance, technical_depth, intel_alignment, audience_fit, innovation_signal, delivery_readiness (each returning score 0-100 and rationale), plus overall (0-100), strengths (array), gaps (array), and recommendation (Accept|Accept with Revisions|Decline). Return ONLY valid JSON with keys: context_profile and ai_system_prompt.';
+    var systemPrompt = 'You are an expert assistant for creating Intel event content strategies. Given raw context about an event, generate two things: (1) a concise context_profile summarizing the event focus, audience, and key themes for content submitters, and (2) a detailed ai_system_prompt for an AI that will score session submissions against this specific event\'s goals. The ai_system_prompt must instruct the AI to score on six universal dimensions — audience_fit, intel_alignment, technical_depth, strategic_value, partner_ecosystem_value, delivery_readiness — each returning score 0-100 and a one-sentence rationale interpreted through the lens of THIS event\'s specific audience, objectives, and content pillars. Also return overall (0-100), strengths (array), gaps (array), and recommendation (Accept|Accept with Revisions|Decline). Return ONLY valid JSON with keys: context_profile and ai_system_prompt.';
     var profile = await callClaude(systemPrompt, context_raw, true);
     res.json({ ok: true, profile: profile });
   } catch (err) {
