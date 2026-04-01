@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intel Event Content Review</title>
+<style>
+@font-face { font-family: 'IntelOneDisplay'; font-weight: 300; src: url('/api/assets/intelone-display-light.woff') format('woff'); }
+@font-face { font-family: 'IntelOneDisplay'; font-weight: 400; src: url('/api/assets/intelone-display-regular.woff') format('woff'); }
+@font-face { font-family: 'IntelOneDisplay'; font-weight: 500; src: url('/api/assets/intelone-display-medium.woff') format('woff'); }
+@font-face { font-family: 'IntelOneDisplay'; font-weight: 700; src: url('/api/assets/intelone-display-bold.woff') format('woff'); }
+*{box-sizing:border-box;margin:0;padding:0;border-radius:0;}
+body{font-family:'IntelOneDisplay',sans-serif;font-weight:400;background:#EAEAEA;color:#2E2F2F;display:flex;height:100vh;overflow:hidden;}
+#sidebar{width:240px;min-width:240px;background:#000864;color:#fff;display:flex;flex-direction:column;height:100vh;}
+#sidebar .logo{padding:20px 16px;border-bottom:1px solid rgba(255,255,255,0.1);}
+#sidebar .logo img{height:32px;}
+#sidebar nav{flex:1;padding:16px 0;}
+#sidebar nav a{display:block;padding:12px 16px;color:rgba(255,255,255,0.7);text-decoration:none;font-weight:500;font-size:14px;border-left:3px solid transparent;cursor:pointer;}
+#sidebar nav a.active{color:#00AAE8;border-left-color:#00AAE8;background:rgba(0,170,232,0.08);}
+#sidebar nav a:hover:not(.active){color:#fff;background:rgba(255,255,255,0.05);}
+#sidebar .event-selector{padding:16px;border-top:1px solid rgba(255,255,255,0.1);}
+#sidebar .event-selector label{display:block;font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:6px;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;}
+#sidebar .event-selector select{width:100%;background:#000555;color:#fff;border:1px solid rgba(255,255,255,0.2);padding:8px 28px 8px 8px;font-family:'IntelOneDisplay',sans-serif;font-size:13px;cursor:pointer;}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+#topbar{height:56px;background:#fff;border-bottom:1px solid #2E2F2F;display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0;}
+#topbar .title{font-weight:700;font-size:16px;}
+#topbar .subtitle{font-size:13px;color:#888;margin-left:8px;}
+#content{flex:1;overflow-y:auto;padding:24px;}
+.btn-primary{background:#00AAE8;color:#fff;border:none;padding:8px 16px;font-family:'IntelOneDisplay',sans-serif;font-weight:700;font-size:13px;cursor:pointer;}
+.btn-primary:hover{background:#0090C8;}
+.btn-secondary{background:#fff;color:#2E2F2F;border:1px solid #2E2F2F;padding:8px 16px;font-family:'IntelOneDisplay',sans-serif;font-weight:400;font-size:13px;cursor:pointer;}
+.btn-secondary:hover{background:#f5f5f5;}
+.btn-danger{background:#CC0000;color:#fff;border:none;padding:8px 16px;font-family:'IntelOneDisplay',sans-serif;font-weight:700;font-size:13px;cursor:pointer;}
+.card{background:#fff;border:1px solid #2E2F2F;padding:20px;margin-bottom:16px;}
+.card h3{font-weight:700;font-size:15px;margin-bottom:4px;}
+.card .meta{font-size:12px;color:#888;font-weight:300;}
+input,textarea,select{font-family:'IntelOneDisplay',sans-serif;font-size:13px;background:#fff;border:1px solid #2E2F2F;color:#2E2F2F;padding:8px;width:100%;}
+input:focus,textarea:focus,select:focus{outline:none;border-color:#00AAE8;}
+label{display:block;font-size:12px;font-weight:500;margin-bottom:4px;color:#2E2F2F;}
+.form-group{margin-bottom:16px;}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #2E2F2F;}
+th{background:#2E2F2F;color:#fff;text-align:left;padding:10px 12px;font-size:12px;font-weight:700;}
+td{padding:10px 12px;font-size:13px;border-bottom:1px solid #EAEAEA;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:#f9f9f9;}
+.badge{display:inline-block;padding:3px 8px;font-size:11px;font-weight:700;color:#fff;}
+.badge-submitted{background:#2E2F2F;}
+.badge-under_review{background:#000864;}
+.badge-approved{background:#007A3D;}
+.badge-rejected{background:#CC0000;}
+.badge-needs_revision{background:#B8860B;}
+.score-high{background:#007A3D;color:#fff;}
+.score-mid{background:#B8860B;color:#fff;}
+.score-low{background:#CC0000;color:#fff;}
+.score-none{background:#6B6B6B;color:#fff;}
+.slot-bar{height:8px;background:#EAEAEA;border:1px solid #ccc;margin:4px 0;}
+.slot-bar-fill{height:100%;background:#00AAE8;}
+.panel-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:100;}
+.panel-overlay.open{display:block;}
+.slide-panel{position:fixed;top:0;right:-600px;width:600px;height:100vh;background:#fff;border-left:1px solid #2E2F2F;z-index:101;overflow-y:auto;transition:right 0.2s;padding:24px;}
+.slide-panel.open{right:0;}
+.slide-panel h2{font-weight:700;font-size:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #EAEAEA;}
+.dim-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;}
+.dim-score{font-weight:700;font-size:14px;}
+.dim-rationale{font-size:12px;color:#666;margin-top:2px;}
+.tabs{display:flex;border-bottom:2px solid #EAEAEA;margin-bottom:20px;}
+.tab{padding:8px 16px;cursor:pointer;font-weight:500;font-size:13px;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px;}
+.tab.active{color:#00AAE8;border-bottom-color:#00AAE8;}
+.section{display:none;}.section.active{display:block;}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+.stat-card{background:#fff;border:1px solid #2E2F2F;padding:16px;text-align:center;}
+.stat-card .num{font-size:32px;font-weight:700;color:#00AAE8;}
+.stat-card .lbl{font-size:12px;color:#888;font-weight:300;}
+.filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center;}
+.filter-bar input{width:200px;}
+.filter-bar select{width:140px;}
+.compare-row{display:grid;gap:8px;margin-bottom:8px;}
+.compare-header{font-weight:700;font-size:12px;color:#888;text-transform:uppercase;}
+.actions a{color:#00AAE8;cursor:pointer;font-size:12px;margin-right:8px;text-decoration:none;}
+.actions a:hover{text-decoration:underline;}
+.alert{padding:12px 16px;margin-bottom:16px;font-size:13px;}
+.alert-error{background:#fff0f0;border:1px solid #CC0000;color:#CC0000;}
+.alert-success{background:#f0fff4;border:1px solid #007A3D;color:#007A3D;}
+.loading{color:#888;font-size:13px;padding:20px 0;}
+#enriched-text p { margin-bottom: 1em; } 
+#enriched-text ul, #enriched-text ol { margin-left: 1.5em; margin-bottom: 1em; } 
+#enriched-text li { margin-bottom: 0.5em; }
+</style>
+<script>(function(){(function(){var e,t=null,n=null;function o(e){var t=[];for(var n=e,r=0;r<4&&n&&n!==document.body;r++){var o=n.tagName.toLowerCase();n.id?o+="#"+n.id:n.className&&"string"==typeof n.className&&(o+="."+n.className.trim().split(/\s+/).slice(0,2).join("."));t.unshift(o);n=n.parentElement}return t.join(" > ")}function i(e,t){return e&&e.length>t?e.slice(0,t)+"...":e||""}function d(e){if(!t){(t=document.createElement("div")).style.cssText="position:fixed;pointer-events:none;outline:2px solid #6366f1;outline-offset:1px;background:rgba(99,102,241,0.1);z-index:2147483647;transition:all 0.05s";document.body.appendChild(t)}var n=e.getBoundingClientRect();t.style.top=n.top+"px";t.style.left=n.left+"px";t.style.width=n.width+"px";t.style.height=n.height+"px";t.style.display="block"}function a(){t&&(t.style.display="none")}document.addEventListener("mousemove",function(t){if(!e)return;var o=document.elementFromPoint(t.clientX,t.clientY);o&&o!==t&&(n=o,d(o))},!0);document.addEventListener("click",function(t){if(!e)return;t.preventDefault();t.stopPropagation();var d=n||t.target;window.parent.postMessage({type:"forge:inspect:selection",outerHTML:i(d.outerHTML,600),textContent:i((d.textContent||"").trim(),200),selector:o(d)},"*")},!0);window.addEventListener("message",function(t){if(t.data){if("forge:inspect:activate"===t.data.type){e=!0;document.body.style.cursor="crosshair"}if("forge:inspect:deactivate"===t.data.type){e=!1;a();document.body.style.cursor=""}}})})()})()</script>
+</head>
+<body>
+<div id="sidebar">
+  <div class="logo"><img src="/api/assets/Logo.png" alt="Intel"></div>
+  <nav>
+    <a class="active" onclick="showSection('events')">Events</a>
+    <a onclick="showSection('submissions')">Submissions</a>
+    <a onclick="showSection('review')">Review</a>
+    <a onclick="showSection('speakers')">Speakers</a>
+  </nav>
+  <div class="event-selector">
+    <label>Current Event</label>
+    <select id="event-select" onchange="onEventChange()"><option>Loading...</option></select>
+  </div>
+</div>
+<div id="main">
+  <div id="topbar">
+    <div><span class="title" id="page-title">Events</span></div>
+    <div id="topbar-action"></div>
+  </div>
+  <div id="content">
+    <!-- EVENTS SECTION -->
+    <div id="section-events" class="section active">
+      <div id="events-list"></div>
+    </div>
+    <!-- SUBMISSIONS SECTION -->
+    <div id="section-submissions" class="section">
+      <div id="submissions-content"></div>
+    </div>
+    <!-- REVIEW SECTION -->
+    <div id="section-review" class="section">
+      <div id="review-content"></div>
+    </div>
+    <!-- SPEAKERS SECTION -->
+    <div id="section-speakers" class="section">
+      <div id="speakers-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide panel -->
+<div class="panel-overlay" id="panel-overlay" onclick="closePanel()"></div>
+<div class="slide-panel" id="slide-panel" onclick="event.stopPropagation()"></div>
+
+
+<script defer>
+var currentEventId = localStorage.getItem('selectedEventId') || null;
+var allEvents = [];
+var allSubmissions = [];
+
+function toTitleCase(str) {
+  if (!str) return '';
+  return str.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
+  document.getElementById('section-' + name).classList.add('active');
+  document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
+    a.classList.toggle('active', ['events','submissions','review','speakers'][i] === name);
+  });
+  document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
+  document.getElementById('topbar-action').innerHTML = '';
+  if (name === 'events') { renderEventsList(); addTopbarBtn('New Event', showNewEventForm); }
+  if (name === 'submissions') { renderSubmissions(); }
+  if (name === 'review') { renderReview(); }
+  if (name === 'speakers') { renderSpeakers(); addTopbarBtn('Add Speaker', () => showSpeakerForm()); }
+}
+
+function addTopbarBtn(label, fn) {
+  var btn = document.createElement('button');
+  btn.className = 'btn-primary'; btn.textContent = label; btn.onclick = function() { fn(); };
+  document.getElementById('topbar-action').appendChild(btn);
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  console.log('[api] Request:', method, path);
+  var opts = { method: method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+    opts.signal = controller.signal;
+    var r = await fetch(path, opts);
+    clearTimeout(timeoutId);
+    console.log('[api] Response status:', r.status);
+    if (!r.ok) {
+      var errText = await r.text();
+      console.error('[api] Error response:', errText);
+      try { return JSON.parse(errText); } catch(e) { return { ok: false, error: 'HTTP ' + r.status + ': ' + errText }; }
+    }
+    var data = await r.json();
+    console.log('[api] Response data:', data);
+    return data;
+  } catch (err) {
+    console.error('[api] Fetch error:', err);
+    if (err.name === 'AbortError') return { ok: false, error: 'Request timed out after 30 seconds' };
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+async function loadEvents() {
+  var data = await api('GET', '/api/events');
+  allEvents = data.events || data || [];
+  var sel = document.getElementById('event-select');
+  sel.innerHTML = allEvents.map(function(e){
+    return '<option value="' + e.id + '"' + (String(e.id) === String(currentEventId) ? ' selected' : '') + '>' + e.name + '</option>';
+  }).join('');
+  if (!currentEventId && allEvents.length) { currentEventId = String(allEvents[0].id); sel.value = currentEventId; }
+  return allEvents;
+}
+
+function onEventChange() {
+  currentEventId = document.getElementById('event-select').value;
+  localStorage.setItem('selectedEventId', currentEventId);
+  var sect = document.querySelector('.section.active');
+  if (sect && sect.id === 'section-submissions') renderSubmissions();
+  if (sect && sect.id === 'section-review') renderReview();
+  if (sect && sect.id === 'section-speakers') renderSpeakers();
+}
+
+async function renderEventsList() {
+  var el = document.getElementById('events-list');
+  el.innerHTML = '<div class="loading">Loading...</div>';
+  await loadEvents();
+  var subsByEvent = {};
+  for (var ei = 0; ei < allEvents.length; ei++) {
+    var evId = allEvents[ei].id;
+    var subs = await api('GET', '/api/submissions?event_id=' + evId);
+    subsByEvent[evId] = (subs.submissions || []).length;
+  }
+  el.innerHTML = allEvents.map(function(e){
+    var count = subsByEvent[e.id] || 0;
+    var slots = e.slot_count || 12;
+    var pct = Math.min(100, Math.round(count/slots*100));
+    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h3>' + e.name + '</h3><div class="meta">' + (e.event_date||'') + ' &nbsp;|&nbsp; ' + (e.venue||'') + '</div></div><div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="badge" style="background:#000864">' + count + ' / ' + slots + ' slots</span><button class="btn-secondary" style="font-size:12px;padding:4px 10px" onclick="showNewEventForm(allEvents.find(function(ev){return ev.id===' + e.id + ';}))">Edit</button></div></div><div class="slot-bar" style="margin-top:12px"><div class="slot-bar-fill" style="width:' + pct + '%"></div></div></div>';
+  }).join('') || '<div class="loading">No events yet.</div>';
+}
+
+// ── Profile field helpers ─────────────────────────────────────────────────────
+function getProfileFieldsHtml() {
+  return '<div class="form-group"><label>Event Strategy</label><textarea id="ef-profile-strategy" rows="4" placeholder="What is the overarching strategy for this event?"></textarea></div>' +
+    '<div class="form-group"><label>Goals</label><textarea id="ef-profile-goals" rows="3" placeholder="What are the primary goals and objectives?"></textarea></div>' +
+    '<div class="form-group"><label>KPIs</label><textarea id="ef-profile-kpis" rows="3" placeholder="How will success be measured?"></textarea></div>' +
+    '<div class="form-group"><label>Audience</label><textarea id="ef-profile-audience" rows="3" placeholder="Who is the target audience? Roles, seniority, departments..."></textarea></div>' +
+    '<div class="form-group"><label>Content Pillars</label><textarea id="ef-profile-pillars" rows="3" placeholder="Key themes and topic areas for content submissions..."></textarea></div>' +
+    '<div class="form-group"><label>Additional Information</label><textarea id="ef-profile-additional" rows="4" placeholder="Any other context: portfolio highlights, speaker requirements, format constraints..."></textarea></div>';
+}
+
+function populateProfileFields(rawProfile) {
+  if (!rawProfile) return;
+  var profileObject = null;
+  if (typeof rawProfile === 'object' && rawProfile !== null) {
+    profileObject = rawProfile;
+  } else if (typeof rawProfile === 'string') {
+    try {
+      var parsed = JSON.parse(rawProfile);
+      if (typeof parsed === 'object' && parsed !== null) {
+        profileObject = parsed;
+      }
+    } catch (e) { /* Not JSON — treat as legacy string */ }
+  }
+  if (profileObject) {
+    document.getElementById('ef-profile-strategy').value = profileObject.event_strategy || '';
+    document.getElementById('ef-profile-goals').value = profileObject.goals || '';
+    document.getElementById('ef-profile-kpis').value = profileObject.kpis || '';
+    document.getElementById('ef-profile-audience').value = profileObject.audience || '';
+    document.getElementById('ef-profile-pillars').value = profileObject.content_pillars || '';
+    document.getElementById('ef-profile-additional').value = profileObject.additional_information || '';
+  } else if (typeof rawProfile === 'string') {
+    // Legacy plain-text profile — drop into Additional Information
+    document.getElementById('ef-profile-additional').value = rawProfile;
+  }
+}
+
+function buildContextRawFromFields() {
+  var parts = [
+    { label: 'Event Strategy', id: 'ef-profile-strategy' },
+    { label: 'Goals', id: 'ef-profile-goals' },
+    { label: 'KPIs', id: 'ef-profile-kpis' },
+    { label: 'Audience', id: 'ef-profile-audience' },
+    { label: 'Content Pillars', id: 'ef-profile-pillars' },
+    { label: 'Additional Information', id: 'ef-profile-additional' }
+  ];
+  var lines = [];
+  parts.forEach(function(p) {
+    var val = (document.getElementById(p.id) || {}).value || '';
+    val = val.trim();
+    if (val) lines.push(p.label + ':\n' + val);
+  });
+  return lines.join('\n\n');
+}
+
+function buildProfileJsonFromFields() {
+  return JSON.stringify({
+    event_strategy: (document.getElementById('ef-profile-strategy') || {}).value || '',
+    goals: (document.getElementById('ef-profile-goals') || {}).value || '',
+    kpis: (document.getElementById('ef-profile-kpis') || {}).value || '',
+    audience: (document.getElementById('ef-profile-audience') || {}).value || '',
+    content_pillars: (document.getElementById('ef-profile-pillars') || {}).value || '',
+    additional_information: (document.getElementById('ef-profile-additional') || {}).value || ''
+  });
+}
+
+// ── Event form ────────────────────────────────────────────────────────────────
+function showNewEventForm(editEvent) {
+  var isEdit = !!editEvent;
+  var panel = document.getElementById('slide-panel');
+  window._editGeneratedProfile = null;
+
+  if (isEdit) {
+    panel.innerHTML = '<h2>Edit Event: ' + (editEvent.name || '') + '</h2>' +
+      '<div class="tabs">' +
+        '<div class="tab active" id="panel-tab-details">Details</div>' +
+        '<div class="tab" id="panel-tab-profile">Content Profile</div>' +
+      '</div>' +
+      '<div id="panel-pane-details">' +
+        '<div class="form-group"><label>Event Name *</label><input id="ef-name" value="' + (editEvent.name || '') + '"></div>' +
+        '<div class="grid-2">' +
+          '<div class="form-group"><label>Event Date</label><input id="ef-date" value="' + (editEvent.event_date || '') + '"></div>' +
+          '<div class="form-group"><label>Total Session Slots</label><input id="ef-slots" type="number" value="' + ((editEvent.slot_count || editEvent.total_slots) || 12) + '"></div>' +
+        '</div>' +
+        '<div class="form-group"><label>Venue</label><input id="ef-venue" value="' + (editEvent.venue || '') + '"></div>' +
+        '<button class="btn-primary" id="btn-save-details">Save Details</button>' +
+      '</div>' +
+      '<div id="panel-pane-profile" style="display:none;">' +
+        getProfileFieldsHtml() +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+          '<button class="btn-secondary" id="btn-regen-profile">Regenerate with AI</button>' +
+          '<button class="btn-primary" id="btn-save-profile">Save Profile</button>' +
+        '</div>' +
+        '<div id="edit-profile-result" style="margin-top:16px"></div>' +
+      '</div>';
+
+    populateProfileFields(editEvent.context_profile);
+
+    document.getElementById('panel-tab-details').addEventListener('click', function() { switchPanelTab('details'); });
+    document.getElementById('panel-tab-profile').addEventListener('click', function() { switchPanelTab('profile'); });
+    document.getElementById('btn-save-details').addEventListener('click', function() { saveEventEdit(editEvent.id); });
+    document.getElementById('btn-regen-profile').addEventListener('click', regenerateProfileEdit);
+    document.getElementById('btn-save-profile').addEventListener('click', function() { saveEventProfile(editEvent.id); });
+
+  } else {
+    panel.innerHTML = '<h2>New Event</h2>' +
+      '<div id="event-form-step1">' +
+        '<div class="form-group"><label>Event Name *</label><input id="ef-name" value=""></div>' +
+        '<div class="grid-2">' +
+          '<div class="form-group"><label>Event Date</label><input id="ef-date" value=""></div>' +
+          '<div class="form-group"><label>Total Session Slots</label><input id="ef-slots" type="number" value="12"></div>' +
+        '</div>' +
+        '<div class="form-group"><label>Venue</label><input id="ef-venue" value=""></div>' +
+        '<button class="btn-primary" id="btn-next-step">Next &rarr;</button>' +
+      '</div>' +
+      '<div id="event-form-step2" style="display:none">' +
+        '<p style="font-size:12px;color:#666;margin-bottom:16px">Fill in as much context as possible. The more detail, the more accurate the AI scoring will be.</p>' +
+        getProfileFieldsHtml() +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<button class="btn-primary" id="btn-gen-profile">Generate Event Profile with AI</button>' +
+          '<button class="btn-secondary" id="btn-save-direct">Save Without Profile</button>' +
+        '</div>' +
+        '<div id="profile-result" style="margin-top:16px"></div>' +
+      '</div>';
+    document.getElementById('btn-next-step').addEventListener('click', showStep2);
+    document.getElementById('btn-gen-profile').addEventListener('click', generateProfile);
+    document.getElementById('btn-save-direct').addEventListener('click', saveEventDirect);
+  }
+  openPanel();
+}
+
+function switchPanelTab(name) {
+  document.getElementById('panel-tab-details').classList.toggle('active', name === 'details');
+  document.getElementById('panel-tab-profile').classList.toggle('active', name === 'profile');
+  var paneDetails = document.getElementById('panel-pane-details');
+  var paneProfile = document.getElementById('panel-pane-profile');
+  if (paneDetails) paneDetails.style.display = name === 'details' ? 'block' : 'none';
+  if (paneProfile) paneProfile.style.display = name === 'profile' ? 'block' : 'none';
+}
+
+async function regenerateProfileEdit() {
+  var ctx = buildContextRawFromFields();
+  if (!ctx) { alert('Enter some information in the profile fields first.'); return; }
+  var resultDiv = document.getElementById('edit-profile-result');
+  var btn = document.getElementById('btn-regen-profile');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  resultDiv.innerHTML = '<div class="loading">Generating profile with AI...</div>';
+  var r = await api('POST', '/api/events/generate-profile', { context_raw: ctx });
+  btn.disabled = false;
+  btn.textContent = 'Regenerate with AI';
+  if (r.error) {
+    resultDiv.innerHTML = '<div class="alert alert-error">' + r.error + '</div>';
+    window._editGeneratedProfile = null;
+    return;
+  }
+  var p = r.profile || r;
+  resultDiv.innerHTML = '<div class="card"><h3>Generated Profile</h3><pre style="font-size:11px;overflow:auto;max-height:200px">' + JSON.stringify(p, null, 2) + '</pre><div style="margin-top:8px;font-size:12px;color:#007A3D">&#10003; Profile ready. Click Save Profile to apply.</div></div>';
+  window._editGeneratedProfile = p;
+}
+
+async function saveEventProfile(id) {
+  var body = {};
+  if (window._editGeneratedProfile) {
+    var profileData = window._editGeneratedProfile.context_profile || window._editGeneratedProfile;
+    body.context_profile = typeof profileData === 'string' ? profileData : JSON.stringify(profileData);
+    body.ai_system_prompt = window._editGeneratedProfile.ai_system_prompt || '';
+  } else {
+    body.context_profile = buildProfileJsonFromFields();
+    body.ai_system_prompt = '';
+  }
+  var r = await api('PUT', '/api/events/' + id, body);
+  if (r.error) { alert(r.error); return; }
+  closePanel();
+  renderEventsList();
+  loadEvents();
+}
+
+function showStep2() {
+  var name = document.getElementById('ef-name').value.trim();
+  if (!name) { alert('Event name is required'); return; }
+  document.getElementById('event-form-step1').style.display = 'none';
+  document.getElementById('event-form-step2').style.display = 'block';
+}
+
+async function generateProfile() {
+  var ctx = buildContextRawFromFields();
+  if (!ctx) { alert('Enter some context in the fields above first.'); return; }
+  document.getElementById('profile-result').innerHTML = '<div class="loading">Generating profile with AI...</div>';
+  var r = await api('POST', '/api/events/generate-profile', { context_raw: ctx });
+  if (r.error) { document.getElementById('profile-result').innerHTML = '<div class="alert alert-error">' + r.error + '</div>'; return; }
+  var p = r.profile || r;
+  document.getElementById('profile-result').innerHTML = '<div class="card"><h3>Generated Profile</h3><pre style="font-size:11px;overflow:auto;max-height:200px">' + JSON.stringify(p, null, 2) + '</pre></div><button class="btn-primary" id="btn-save-with-profile">Save Event</button>';
+  document.getElementById('btn-save-with-profile').addEventListener('click', saveEventWithProfile);
+  window._generatedProfile = p;
+}
+
+async function saveEventWithProfile() {
+  var body = {
+    name: document.getElementById('ef-name').value.trim(),
+    event_date: document.getElementById('ef-date').value,
+    venue: document.getElementById('ef-venue').value,
+    total_slots: parseInt(document.getElementById('ef-slots').value) || 12,
+    context_profile: window._generatedProfile ? JSON.stringify(window._generatedProfile) : buildProfileJsonFromFields()
+  };
+  if (window._generatedProfile && window._generatedProfile.ai_system_prompt) {
+    body.ai_system_prompt = window._generatedProfile.ai_system_prompt;
+  }
+  var r = await api('POST', '/api/events', body);
+  if (r.error) { alert(r.error); return; }
+  closePanel(); renderEventsList(); loadEvents();
+}
+
+async function saveEventDirect() {
+  var body = {
+    name: document.getElementById('ef-name').value.trim(),
+    event_date: document.getElementById('ef-date').value,
+    venue: document.getElementById('ef-venue').value,
+    total_slots: parseInt(document.getElementById('ef-slots').value) || 12,
+    context_profile: buildProfileJsonFromFields()
+  };
+  if (!body.name) { alert('Event name required'); return; }
+  var r = await api('POST', '/api/events', body);
+  if (r.error) { alert(r.error); return; }
+  closePanel(); renderEventsList(); loadEvents();
+}
+
+async function saveEventEdit(id) {
+  var body = { name: document.getElementById('ef-name').value.trim(), event_date: document.getElementById('ef-date').value, venue: document.getElementById('ef-venue').value, total_slots: parseInt(document.getElementById('ef-slots').value)||12 };
+  var r = await api('PUT', '/api/events/' + id, body);
+  if (r.error) { alert(r.error); return; }
+  closePanel(); renderEventsList(); loadEvents();
+}
+
+// ── Submissions ───────────────────────────────────────────────────────────────
+var subFilters = { search: '', track: '', bu: '', status: '', has_demo: '', has_partner: '' };
+
+function parseAiScore(s) {
+  if (!s.ai_score) return s;
+  if (typeof s.ai_score === 'string') {
+    try { s.ai_score = JSON.parse(s.ai_score); } catch(e) { s.ai_score = null; }
+  }
+  return s;
+}
+
+async function renderSubmissions() {
+  console.log('[renderSubmissions] START, currentEventId:', currentEventId);
+  var el = document.getElementById('submissions-content');
+  if (!currentEventId) { 
+    el.innerHTML = '<div class="loading">Select an event first.</div>'; 
+    return; 
+  }
+  try {
+    el.innerHTML = '<div class="loading">Loading...</div>';
+    var event = allEvents.find(function(e){return String(e.id)===String(currentEventId);});
+    console.log('[renderSubmissions] Calling API...');
+    var data = await api('GET', '/api/submissions?event_id=' + currentEventId);
+    console.log('[renderSubmissions] API returned:', JSON.stringify(data).slice(0, 500));
+    if (!data) {
+      throw new Error('API returned null/undefined');
+    }
+    if (data.ok === false) {
+      throw new Error(data.error || 'API returned ok:false');
+    }
+    if (!data.submissions) {
+      throw new Error('No submissions array in response. Keys: ' + Object.keys(data).join(', '));
+    }
+    allSubmissions = (data.submissions || []).map(parseAiScore);
+    var tracks = [...new Set(allSubmissions.map(function(s){return s.track;}).filter(Boolean))];
+    var bus = [...new Set(allSubmissions.map(function(s){return s.bu;}).filter(Boolean))];
+    var slots = event ? event.slot_count || 12 : 12;
+    var used = allSubmissions.length;
+    var pct = Math.min(100, Math.round(used/slots*100));
+    el.innerHTML = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px"><div style="flex:1"><div class="slot-bar"><div class="slot-bar-fill" style="width:' + pct + '%"></div></div><div style="font-size:12px;color:#888;margin-top:4px">' + used + ' / ' + slots + ' slots used</div></div><button class="btn-primary" onclick="showAddSubmission()">+ Add Submission</button><button class="btn-secondary" onclick="exportCSV()">Export CSV</button></div>' +
+      '<div class="filter-bar"><input placeholder="Search title / speaker..." oninput="subFilters.search=this.value;renderSubTable()" value="' + subFilters.search + '"><select onchange="subFilters.track=this.value;renderSubTable()"><option value="">All Tracks</option>' + tracks.map(function(t){return '<option value="' + t + '"' + (subFilters.track===t?' selected':'') + '>' + t + '</option>';}).join('') + '</select><select onchange="subFilters.bu=this.value;renderSubTable()"><option value="">All BUs</option>' + bus.map(function(b){return '<option value="' + b + '"' + (subFilters.bu===b?' selected':'') + '>' + b + '</option>';}).join('') + '</select><select onchange="subFilters.status=this.value;renderSubTable()"><option value="">All Status</option><option value="submitted">Submitted</option><option value="under_review">Under Review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="needs_revision">Needs Revision</option></select></div>' +
+      '<div id="sub-table"></div>';
+    renderSubTable();
+  } catch (err) {
+    el.innerHTML = '<div class="alert alert-error">Failed to load submissions: ' + err.message + '</div>';
+  }
+}
+
+function renderSubTable() {
+  var filtered = allSubmissions.filter(function(s){
+    if (subFilters.search) { var q = subFilters.search.toLowerCase(); if (!(s.title||'').toLowerCase().includes(q) && !(s.speaker_names||'').toLowerCase().includes(q) && !(s.content_lead||'').toLowerCase().includes(q)) return false; }
+    if (subFilters.track && s.track !== subFilters.track) return false;
+    if (subFilters.bu && s.bu !== subFilters.bu) return false;
+    if (subFilters.status && s.status !== subFilters.status) return false;
+    return true;
+  });
+  var html = '<table><thead><tr><th>Title</th><th>BU</th><th>Track</th><th>Format</th><th>Speakers</th><th>Demo</th><th>Status</th><th>AI Score</th><th>Actions</th></tr></thead><tbody>';
+  filtered.forEach(function(s){
+    var score = s.ai_score ? (s.ai_score.overall_score != null ? s.ai_score.overall_score : s.ai_score.overall) : null;
+    var scoreBadge = score !== null ? '<span class="badge ' + (score>=80?'score-high':score>=60?'score-mid':'score-low') + '">Score: ' + score + '</span>' : '<span class="badge score-none">Not Scored</span>';
+    var statusBadge = '<span class="badge badge-' + (s.status||'submitted') + '">' + toTitleCase(s.status||'submitted') + '</span>';
+    html += '<tr><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.title||'') + '">' + (s.title||'').slice(0,55) + (s.title&&s.title.length>55?'...':'') + '</td><td>' + (s.bu||'&mdash;') + '</td><td>' + (s.track||'&mdash;') + '</td><td>' + (s.format||'&mdash;') + '</td><td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.speaker_names||'') + '">' + (s.speaker_names||'&mdash;') + '</td><td style="text-align:center">' + (s.demos&&s.demos!=='None'&&s.demos!=='TBD'?'&#10003;':'&mdash;') + '</td><td>' + statusBadge + '</td><td>' + scoreBadge + '</td><td class="actions"><a onclick="viewSubmission(' + s.id + ')">View</a><a onclick="scoreSubmission(' + s.id + ')">Score</a><a onclick="editStatus(' + s.id + ')">Status</a><a onclick="editSubmission(' + s.id + ')">Edit</a></td></tr>';
+  });
+  html += '</tbody></table>';
+  if (!filtered.length) html = '<div class="loading">No submissions match filters.</div>';
+  document.getElementById('sub-table').innerHTML = html;
+}
+
+async function populateSpeakerDropdown(selectedSpeakerIds) {
+  const select = document.getElementById('sf-speaker_id');
+  if (!select) return;
+  select.innerHTML = ''; // Reset for multi-select
+  
+  // Normalize selectedSpeakerIds to array
+  var selectedIds = selectedSpeakerIds || [];
+  if (!Array.isArray(selectedIds)) selectedIds = selectedIds ? [selectedIds] : [];
+  selectedIds = selectedIds.map(function(id) { return String(id); });
+  
+  try {
+    const data = await api('GET', `/api/speakers?event_id=${currentEventId}`);
+    const speakers = data.speakers || [];
+    speakers.forEach(speaker => {
+      const option = document.createElement('option');
+      option.value = speaker.id;
+      option.textContent = `${speaker.full_name} (${speaker.company || 'N/A'})`;
+      if (selectedIds.indexOf(String(speaker.id)) !== -1) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Failed to populate speaker dropdown:', error);
+    select.innerHTML = '<option value="">Error loading speakers</option>';
+  }
+}
+
+function showAddSubmission() {
+  var panel = document.getElementById('slide-panel');
+  panel.innerHTML = '<h2>Add Submission</h2>' + submissionForm(null) + '<button class="btn-primary" id="btn-save-sub">Save Submission</button>';
+  document.getElementById('btn-save-sub').addEventListener('click', saveNewSubmission);
+  openPanel();
+  populateSpeakerDropdown();
+}
+
+function submissionForm(s) {
+  var f = s || {};
+  var fields = [
+    ['title','Title'],
+    ['content_lead','Content Lead'],
+    ['bu','BU'],
+    ['track','Track'],
+    ['format','Format'],
+    ['duration','Duration'],
+    ['speaker_id', 'Speaker', 'select'],
+    ['abstract','Abstract','textarea'],
+    ['key_topics','Key Topics','textarea'],
+    ['demos','Demos'],
+    ['featured_products','Featured Products'],
+    ['business_challenge','Business Challenge'],
+    ['partner_highlights','Partner Highlights'],
+    ['new_launches','New Launches']
+  ];
+  return fields.map(function(fd){
+    var id = fd[0], label = fd[1], type = fd[2];
+    var val = f[id] || '';
+    if (type === 'textarea') {
+      if (id === 'abstract') {
+        return `<div class="form-group"><label>${label}</label><textarea id="sf-${id}" rows="3" maxlength="650" oninput="updateAbstractCounter()">${val}</textarea><div style="font-size:11px;color:#888;margin-top:4px"><span id="abstract-counter">${val.length}</span> / <span id="abstract-limit">650</span> characters</div><div style="display:flex;align-items:center;gap:4px;margin-top:8px;justify-content:flex-start"><input type="checkbox" id="abstract-override" onchange="toggleAbstractOverride()" style="margin:0;cursor:pointer;width:auto"><span style="font-size:12px;font-weight:400;cursor:pointer" onclick="document.getElementById('abstract-override').click()">Override (allow 1000 characters)</span></div></div>`;
+      }
+      return `<div class="form-group"><label>${label}</label><textarea id="sf-${id}" rows="3">${val}</textarea></div>`;
+    }
+    if (type === 'select') {
+      return `<div class="form-group"><label for="sf-${id}">${label}</label><select id="sf-${id}" multiple style="height:120px"></select><div style="font-size:11px;color:#888;margin-top:4px">Hold Ctrl/Cmd to select multiple speakers</div></div>`;
+    }
+    return `<div class="form-group"><label>${label}</label><input id="sf-${id}" value="${val.toString().replace(/"/g,'&quot;')}"></div>`;
+  }).join('');
+}
+
+function getSubmissionFormData() {
+  var fields = ['title','content_lead','bu','track','format','duration','abstract','key_topics','demos','featured_products','business_challenge','partner_highlights','new_launches'];
+  var data = { event_id: currentEventId };
+  fields.forEach(function(f){ data[f] = (document.getElementById('sf-' + f)||{}).value || ''; });
+  
+  // Collect multiple selected speakers from multi-select
+  var speakerSelect = document.getElementById('sf-speaker_id');
+  var speakerIds = [];
+  if (speakerSelect) {
+    for (var i = 0; i < speakerSelect.options.length; i++) {
+      if (speakerSelect.options[i].selected) {
+        speakerIds.push(parseInt(speakerSelect.options[i].value, 10));
+      }
+    }
+  }
+  data.speaker_ids = speakerIds;
+  return data;
+}
+
+async function saveNewSubmission() {
+  var data = getSubmissionFormData();
+  var r = await api('POST', '/api/submissions', data);
+  if (r.error) { alert(r.error); return; }
+  closePanel(); renderSubmissions();
+}
+
+async function viewSubmission(id) {
+  var s = allSubmissions.find(function(x){return x.id===id;});
+  if (!s) return;
+  var score = s.ai_score;
+  var scoreHtml = '';
+  if (score) {
+    var dims = score.dimension_scores || score.dimensions || {};
+    var overall = score.overall_score != null ? score.overall_score : (score.overall != null ? score.overall : 0);
+    var cls = overall>=80?'score-high':overall>=60?'score-mid':'score-low';
+    scoreHtml = '<div style="margin-top:16px;padding-top:16px;border-top:1px solid #EAEAEA">';
+    scoreHtml += '<div style="font-weight:700;margin-bottom:8px">AI Score: <span class="badge ' + cls + '" style="font-size:16px">' + overall + '</span></div>';
+    Object.keys(dims).forEach(function(k) {
+      var d = dims[k];
+      scoreHtml += '<div class="dim-row"><div><div style="font-weight:500;font-size:13px">' + toTitleCase(k) + '</div>';
+      scoreHtml += '<div class="dim-rationale">' + (d.rationale||'') + '</div></div>';
+      scoreHtml += '<div class="dim-score">' + d.score + '</div></div>';
+    });
+    scoreHtml += '<div style="margin-top:12px"><div style="font-weight:500;margin-bottom:4px;color:#007A3D">Strengths</div>';
+    (score.strengths||[]).forEach(function(st){ scoreHtml += '<div style="font-size:12px;margin-bottom:2px">&bull; ' + st + '</div>'; });
+    scoreHtml += '</div><div style="margin-top:8px"><div style="font-weight:500;margin-bottom:4px;color:#CC0000">Gaps</div>';
+    (score.gaps||[]).forEach(function(g){ scoreHtml += '<div style="font-size:12px;margin-bottom:2px">&bull; ' + g + '</div>'; });
+    scoreHtml += '</div><div style="margin-top:12px;padding:12px;background:#f9f9f9;border:1px solid #EAEAEA">';
+    scoreHtml += '<div style="font-weight:700">' + (score.recommendation||'') + '</div>';
+    scoreHtml += '<div style="font-size:12px;color:#666;margin-top:4px">' + (score.recommendation_rationale||'') + '</div></div></div>';
+  }
+  var panel = document.getElementById('slide-panel');
+  panel.innerHTML =
+    '<h2>' + (s.title||'Untitled') + '</h2>' +
+    '<div class="grid-2">' +
+      '<div><b>BU:</b> ' + (s.bu||'&mdash;') + '</div>' +
+      '<div><b>Track:</b> ' + (s.track||'&mdash;') + '</div>' +
+      '<div><b>Format:</b> ' + (s.format||'&mdash;') + '</div>' +
+      '<div><b>Duration:</b> ' + (s.duration||'&mdash;') + '</div>' +
+    '</div>' +
+    '<div style="margin-top:12px"><b>Speakers:</b> ' + (s.speaker_names||'&mdash;') + '</div>' +
+    '<div style="margin-top:8px"><b>Abstract:</b><p style="font-size:13px;margin-top:4px;color:#444">' + (s.abstract||'&mdash;') + '</p></div>' +
+    '<div id="enrich-container" style="margin-top:16px;"></div>' +
+    '<div style="margin-top:8px"><b>Key Topics:</b> ' + (s.key_topics||'&mdash;') + '</div>' +
+    '<div style="margin-top:8px"><b>Demos:</b> ' + (s.demos||'&mdash;') + '</div>' +
+    '<div style="margin-top:8px"><b>Featured Products:</b> ' + (s.featured_products||'&mdash;') + '</div>' +
+    '<div style="margin-top:16px"><label>Reviewer Notes</label>' +
+      '<textarea id="notes-field" rows="3" style="margin-top:4px">' + (s.reviewer_notes||'') + '</textarea>' +
+      '<button class="btn-secondary" style="margin-top:8px" id="btn-save-notes">Save Notes</button>' +
+    '</div>' +
+    '<div id="action-buttons" style="margin-top:12px;display:flex;gap:8px">' +
+      '<button class="btn-primary" id="btn-run-score">Run AI Score</button>' +
+    '</div>' +
+    scoreHtml;
+  
+  if (!s.enriched_abstract) {
+    var enrichBtn = document.createElement('button');
+    enrichBtn.id = 'btn-enrich-abstract';
+    enrichBtn.className = 'btn-secondary';
+    enrichBtn.textContent = 'Enrich Abstract';
+    enrichBtn.onclick = function() { enrichAbstract(id); };
+    document.getElementById('action-buttons').appendChild(enrichBtn);
+  } else {
+    document.getElementById('enrich-container').innerHTML = 
+      '<div style="padding:12px;background:#f9f9f9;border:1px solid #EAEAEA">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<h4 style="font-weight:700;font-size:14px;">AI Enriched Abstract</h4>' +
+          '<button class="btn-secondary" style="font-size:11px;padding:4px 8px" onclick="copyEnrichedAbstract()">Copy</button>' +
+        '</div>' +
+        '<div id="enriched-text" style="font-size:13px;color:#444">' + s.enriched_abstract + '</div>' +
+      '</div>';
+  }
+
+  document.getElementById('btn-save-notes').addEventListener('click', function() {
+    saveNotes(id, document.getElementById('notes-field').value);
+  });
+  document.getElementById('btn-run-score').addEventListener('click', function() { scoreSubmission(id); });
+  
+  openPanel();
+}
+
+
+async function saveNotes(id, notes) {
+  await api('PUT', '/api/submissions/' + id, { reviewer_notes: notes });
+}
+
+function editSubmission(id) {
+  var s = allSubmissions.find(function(x){return x.id===id;});
+  if (!s) return;
+  var panel = document.getElementById('slide-panel');
+  panel.innerHTML = '<h2>Edit Submission</h2>' + submissionForm(s) + '<button class="btn-primary" id="btn-save-edit-sub">Save Changes</button>';
+  document.getElementById('btn-save-edit-sub').addEventListener('click', function() { saveEditedSubmission(id); });
+  openPanel();
+  populateSpeakerDropdown(s.speaker_ids || []);
+}
+
+async function saveEditedSubmission(id) {
+  var data = getSubmissionFormData();
+  delete data.event_id;
+  var r = await api('PUT', '/api/submissions/' + id, data);
+  if (r.error) { alert(r.error); return; }
+  // Refresh the full submissions list to get speaker_names populated
+  closePanel();
+  renderSubmissions();
+}
+
+function editStatus(id) {
+  var s = allSubmissions.find(function(x){return x.id===id;});
+  var current = s ? s.status : 'submitted';
+  var statuses = ['submitted','under_review','approved','rejected','needs_revision'];
+  var panel = document.getElementById('slide-panel');
+  panel.innerHTML =
+    '<h2>Edit Status</h2>' +
+    '<div class="form-group"><label>Status</label>' +
+      '<select id="status-sel">' +
+        statuses.map(function(st) {
+          return '<option value="' + st + '"' + (current===st?' selected':'') + '>' + st.replace('_',' ') + '</option>';
+        }).join('') +
+      '</select>' +
+    '</div>' +
+    '<button class="btn-primary" id="btn-save-status">Save</button>';
+  document.getElementById('btn-save-status').addEventListener('click', function() {
+    saveStatus(id, document.getElementById('status-sel').value);
+  });
+  openPanel();
+}
+
+async function saveStatus(id, status) {
+  await api('PUT', '/api/submissions/' + id, { status: status });
+  var s = allSubmissions.find(function(x){return x.id===id;}); if (s) s.status = status;
+  closePanel(); renderSubTable();
+}
+
+async function scoreSubmission(id) {
+  var panel = document.getElementById('slide-panel');
+  panel.innerHTML = '<h2>Scoring...</h2><div class="loading">Running AI alignment scoring...</div>';
+  openPanel();
+  var r = await api('POST', '/api/submissions/' + id + '/score');
+  if (r.error) { panel.innerHTML = '<h2>Error</h2><div class="alert alert-error">' + r.error + '</div>'; return; }
+  var raw = r.scorecard || r.ai_score || r;
+  var normalized = {
+    overall_score: raw.overall_score || raw.overall || 0,
+    dimension_scores: raw.dimension_scores || raw.dimensions || {},
+    strengths: raw.strengths || [],
+    gaps: raw.gaps || [],
+    recommendation: raw.recommendation || '',
+    recommendation_rationale: raw.recommendation_rationale || raw.rationale || ''
+  };
+  var idx2 = allSubmissions.findIndex(function(x){return x.id===id;});
+  if (idx2>=0) allSubmissions[idx2].ai_score = normalized;
+  renderSubTable();
+  viewSubmission(id);
+}
+
+async function enrichAbstract(id) {
+  var container = document.getElementById('enrich-container');
+  container.innerHTML = '<div class="loading">Enriching abstract with AI...</div>';
+
+  try {
+    var r = await api('POST', '/api/submissions/' + id + '/enrich');
+    if (r.error) {
+      container.innerHTML = '<div class="alert alert-error">' + r.error + '</div>';
+      return;
+    }
+    
+    var updatedSubmission = r.submission;
+    if (!updatedSubmission || !updatedSubmission.enriched_abstract) {
+        container.innerHTML = '<div class="alert alert-error">Enrichment failed to return content.</div>';
+        return;
+    }
+
+    var index = allSubmissions.findIndex(function(s){ return s.id === id; });
+    if (index !== -1) {
+        allSubmissions[index] = updatedSubmission;
+    }
+
+    container.innerHTML = 
+      '<div style="padding:12px;background:#f9f9f9;border:1px solid #EAEAEA">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<h4 style="font-weight:700;font-size:14px;">AI Enriched Abstract</h4>' +
+          '<button class="btn-secondary" style="font-size:11px;padding:4px 8px" onclick="copyEnrichedAbstract()">Copy</button>' +
+        '</div>' +
+        '<div id="enriched-text" style="font-size:13px;color:#444">' + updatedSubmission.enriched_abstract + '</div>' +
+      '</div>';
+    
+    var enrichBtn = document.getElementById('btn-enrich-abstract');
+    if (enrichBtn) enrichBtn.remove();
+
+  } catch (err) {
+    container.innerHTML = '<div class="alert alert-error">An unexpected error occurred while enriching the abstract.</div>';
+  }
+}
+
+
+function copyEnrichedAbstract() {
+  var textElement = document.getElementById('enriched-text');
+  if (!textElement) {
+    alert('Could not find enriched text to copy.');
+    return;
+  }
+  
+  var html = textElement.innerHTML;
+  var text = textElement.innerText;
+
+  navigator.clipboard.write([
+    new ClipboardItem({
+      'text/html': new Blob([html], { type: 'text/html' }),
+      'text/plain': new Blob([text], { type: 'text/plain' })
+    })
+  ]).then(function() {
+    alert('Enriched abstract copied to clipboard!');
+  }, function(err) {
+    alert('Failed to copy text: ' + err);
+  });
+}
+
+function exportCSV() {
+  window.open('/api/submissions/export?event_id=' + currentEventId);
+}
+
+// ── Review ────────────────────────────────────────────────────────────────────
+var compareIds = [];
+
+async function renderReview() {
+  var el = document.getElementById('review-content');
+  if (!currentEventId) { 
+    el.innerHTML = '<div class="loading">Select an event first.</div>'; 
+    return; 
+  }
+  try {
+    el.innerHTML = '<div class="loading">Loading...</div>';
+    var data = await api('GET', '/api/submissions?event_id=' + currentEventId);
+    if (!data.ok || !data.submissions) throw new Error(data.error || 'API request failed or returned invalid data');
+    allSubmissions = (data.submissions || []).map(parseAiScore);
+    var scored = allSubmissions.filter(function(s){return s.ai_score;});
+    var unscored = allSubmissions.filter(function(s){return !s.ai_score;});
+    var tracks = {};
+    allSubmissions.forEach(function(s){ if (s.track) { if (!tracks[s.track]) tracks[s.track] = []; tracks[s.track].push(s); } });
+    var sortedSubs = scored.slice().sort(function(a,b){return (b.ai_score.overall_score||0)-(a.ai_score.overall_score||0);});
+
+    var html = '';
+    html += '<div class="grid-3" style="margin-bottom:20px">';
+    html += '<div class="stat-card"><div class="num">' + allSubmissions.length + '</div><div class="lbl">Total Submissions</div></div>';
+    html += '<div class="stat-card"><div class="num">' + scored.length + '</div><div class="lbl">Scored</div></div>';
+    html += '<div class="stat-card"><div class="num">' + unscored.length + '</div><div class="lbl">Unscored</div></div>';
+    html += '</div>';
+    html += '<div style="margin-bottom:20px">';
+    html += '<button class="btn-primary" onclick="scoreAllUnscored()">Score All Unscored (' + unscored.length + ')</button> ';
+    html += '<button class="btn-secondary" onclick="exportCSV()">Export CSV</button>';
+    html += '</div>';
+    html += '<div class="tabs">';
+    html += '<div class="tab active" id="tab-ranked" onclick="reviewTab(this, &quot;ranked&quot;)">Ranked</div>';
+    html += '<div class="tab" id="tab-tracks" onclick="reviewTab(this, &quot;tracks&quot;)">By Track</div>';
+    html += '<div class="tab" id="tab-compare" onclick="reviewTab(this, &quot;compare&quot;)">Compare</div>';
+    html += '</div>';
+
+    html += '<div id="review-ranked">';
+    html += '<h3 style="font-weight:700;margin-bottom:12px">All Submissions by Score</h3>';
+    if (sortedSubs.length === 0) {
+      html += '<div class="loading">No scored submissions yet. Run scoring first.</div>';
+    } else {
+      sortedSubs.forEach(function(s) {
+        var sc = s.ai_score;
+        var scoreNum = (sc && sc.overall_score !== null && sc.overall_score !== undefined) ? sc.overall_score : null;
+        var cls = scoreNum !== null ? (scoreNum >= 80 ? 'score-high' : scoreNum >= 60 ? 'score-mid' : 'score-low') : 'score-none';
+        var scoreText = scoreNum !== null ? 'Score: ' + scoreNum : 'Not Scored';
+        html += '<div class="card" style="display:flex;justify-content:space-between;align-items:flex-start">';
+        html += '<div style="flex:1"><div style="font-weight:700">' + (s.title||'') + '</div>';
+        html += '<div style="font-size:12px;color:#888">' + (s.bu||'') + ' | ' + (s.track||'') + '</div>';
+        html += '<div style="font-size:12px;margin-top:4px;color:#444">' + (sc ? (sc.recommendation||'') : '') + '</div></div>';
+        html += '<div style="text-align:right;margin-left:16px">';
+        html += '<span class="badge ' + cls + '" style="font-size:18px;padding:6px 12px">' + scoreText + '</span>';
+        html += '<div style="margin-top:8px"><a style="color:#00AAE8;cursor:pointer;font-size:12px" onclick="viewSubmission(' + s.id + ')">View Details</a></div>';
+        html += '</div></div>';
+      });
+    }
+    html += '</div>';
+
+    html += '<div id="review-tracks" style="display:none">';
+    Object.keys(tracks).forEach(function(track) {
+      var ts = tracks[track].slice().sort(function(a,b){return ((b.ai_score&&b.ai_score.overall_score)||0)-((a.ai_score&&a.ai_score.overall_score)||0);});
+      html += '<div style="margin-bottom:20px">';
+      html += '<h3 style="font-weight:700;margin-bottom:8px;padding-bottom:8px;border-bottom:2px solid #00AAE8">' + track + ' (' + ts.length + ')</h3>';
+      ts.forEach(function(s) {
+        var sc = s.ai_score;
+        var scoreNum = (sc && sc.overall_score !== null && sc.overall_score !== undefined) ? sc.overall_score : null;
+        var cls = scoreNum !== null ? (scoreNum >= 80 ? 'score-high' : scoreNum >= 60 ? 'score-mid' : 'score-low') : 'score-none';
+        var scoreVal = scoreNum !== null ? 'Score: ' + scoreNum : 'Not Scored';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #EAEAEA">';
+        html += '<div><div style="font-weight:500">' + (s.title||'').slice(0,70) + '</div>';
+        html += '<div style="font-size:11px;color:#888">' + (s.bu||'') + '</div></div>';
+        html += '<div style="display:flex;align-items:center;gap:8px">';
+        html += '<span class="badge ' + cls + '">' + scoreVal + '</span>';
+        html += '<a style="color:#00AAE8;cursor:pointer;font-size:12px" onclick="viewSubmission(' + s.id + ')">View</a>';
+        html += '</div></div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+
+    html += '<div id="review-compare" style="display:none">';
+    html += '<div style="margin-bottom:12px;font-size:13px;color:#666">Select 2-3 submissions to compare:</div>';
+    html += '<div id="compare-picks" style="margin-bottom:16px">';
+    allSubmissions.forEach(function(s) {
+      html += '<label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer">';
+      html += '<input type="checkbox" value="' + s.id + '" onchange="toggleCompare(' + s.id + ')"> ';
+      html += (s.title||'').slice(0,80) + '</label>';
+    });
+    html += '</div><div id="compare-table"></div></div>';
+
+    el.innerHTML = html;
+  } catch(err) {
+    el.innerHTML = '<div class="alert alert-error">Failed to load review data: ' + err.message + '</div>';
+  }
+}
+
+async function scoreAllUnscored() {
+  var unscored = allSubmissions.filter(function(s){return !s.ai_score;});
+  if (!unscored.length) { alert('All submissions already scored.'); return; }
+  if (!confirm('Score ' + unscored.length + ' unscored submissions? This may take a minute.')) return;
+  var btn = event.target; btn.disabled = true; btn.textContent = 'Scoring...';
+  for (var i = 0; i < unscored.length; i++) {
+    btn.textContent = 'Scoring ' + (i+1) + ' / ' + unscored.length + '...';
+    var r = await api('POST', '/api/submissions/' + unscored[i].id + '/score');
+    if (r.ai_score || r.overall_score) { var idx = allSubmissions.findIndex(function(s){return s.id===unscored[i].id;}); if (idx>=0) allSubmissions[idx].ai_score = r.ai_score || r; }
+  }
+  btn.disabled = false; btn.textContent = 'Score All Unscored';
+  renderReview();
+}
+
+// ── Review tab switcher ──────────────────────────────────────────────────────
+function reviewTab(el, name) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  ['ranked','tracks','compare'].forEach(function(n){
+    var div = document.getElementById('review-' + n);
+    if (div) div.style.display = n === name ? 'block' : 'none';
+  });
+}
+
+function toggleCompare(id) {
+  var idx = compareIds.indexOf(id);
+  if (idx === -1) { if (compareIds.length < 3) compareIds.push(id); }
+  else { compareIds.splice(idx, 1); }
+  renderCompareTable();
+}
+
+function renderCompareTable() {
+  var el = document.getElementById('compare-table');
+  if (!el) return;
+  var subs = compareIds.map(function(id){ return allSubmissions.find(function(s){return s.id===id;}); }).filter(Boolean);
+  if (subs.length < 2) { el.innerHTML = '<div class="loading">Select 2 or 3 submissions above to compare.</div>'; return; }
+  var dims = ['federal_relevance','technical_depth','intel_alignment','audience_fit','innovation_signal','delivery_readiness'];
+  var html = '<table><thead><tr><th>Dimension</th>' + subs.map(function(s){return '<th>' + (s.title||'').slice(0,30) + '</th>';}).join('') + '</tr></thead><tbody>';
+  dims.forEach(function(d){
+    html += '<tr><td style="font-weight:500">' + toTitleCase(d) + '</td>';
+    subs.forEach(function(s){
+      var sc = s.ai_score && s.ai_score.dimension_scores && s.ai_score.dimension_scores[d] ? s.ai_score.dimension_scores[d].score : (s.ai_score && s.ai_score.dimensions && s.ai_score.dimensions[d] ? s.ai_score.dimensions[d].score : '&mdash;');
+      var dimCls = typeof sc === 'number' ? (sc>=80?'score-high':sc>=60?'score-mid':'score-low') : 'score-none';
+      var dimLabel = typeof sc === 'number' ? 'Score: ' + sc : 'Not Scored';
+      html += '<td><span class="badge ' + dimCls + '">' + dimLabel + '</span></td>';
+    });
+    html += '</tr>';
+  });
+  html += '<tr><td style="font-weight:700">Overall</td>';
+  subs.forEach(function(s){
+    var ov = s.ai_score ? (s.ai_score.overall_score || s.ai_score.overall || null) : null;
+    var ovCls = typeof ov === 'number' ? (ov>=80?'score-high':ov>=60?'score-mid':'score-low') : 'score-none';
+    var ovLabel = typeof ov === 'number' ? 'Score: ' + ov : 'Not Scored';
+    html += '<td><span class="badge ' + ovCls + '" style="font-size:14px">' + ovLabel + '</span></td>';
+  });
+  html += '</tr></tbody></table>';
+  el.innerHTML = html;
+}
+
+// ── Speakers ──────────────────────────────────────────────────────────────────
+async function renderSpeakers() {
+    const el = document.getElementById('speakers-content');
+    if (!currentEventId) { 
+        el.innerHTML = '<div class="loading">Select an event first.</div>'; 
+        return; 
+    }
+    try {
+        el.innerHTML = '<div class="loading">Loading speakers...</div>';
+        const data = await api('GET', `/api/speakers?event_id=${currentEventId}`);
+        if (!data.ok || !data.speakers) throw new Error(data.error || 'API request failed or returned invalid data');
+        const speakers = data.speakers || [];
+
+        if (speakers.length === 0) {
+            el.innerHTML = '<div class="loading">No speakers added for this event yet.</div>';
+            return;
+        }
+
+        let tableHtml = '<table><thead><tr><th>Headshot</th><th>Name</th><th>Title</th><th>Company</th><th>Actions</th></tr></thead><tbody>';
+        speakers.forEach(speaker => {
+            const headshotSrc = speaker.has_headshot 
+                ? `/api/speakers/${speaker.id}/headshot` 
+                : 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2NjYyI+PHBhdGggZD0iTTEyIDEyYzIuMjEgMCA0LTEuNzkgNC00cy0xLjc5LTQtNC00LTQgMS43OS00IDQgMS43OSA0IDQgNHptMCAyYy0yLjY3IDAtOCAxLjM0LTggNHYyYzAgMS4xLjkgMiAyIDJoMTRjMS4xIDAgMi0uOSAyLTJ2LTJjMC0yLjY2LTUuMzMtNC04LTR6Ii8+PC9wYXRoPjwvc3ZnPg==';
+
+            tableHtml += `
+                <tr>
+                    <td style="width: 60px; vertical-align: middle;">
+                        <img src="${headshotSrc}" alt="${speaker.full_name}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;background-color:#f0f0f0;">
+                    </td>
+                    <td style="vertical-align: middle;">${speaker.full_name || ''}</td>
+                    <td style="vertical-align: middle;">${speaker.title || ''}</td>
+                    <td style="vertical-align: middle;">${speaker.company || ''}</td>
+                    <td class="actions" style="vertical-align: middle;">
+                        <a onclick="editSpeakerById(${speaker.id})">Edit</a>
+                        <a onclick="deleteSpeaker(${speaker.id})">Delete</a>
+                    </td>
+                </tr>
+            `;
+        });
+        tableHtml += '</tbody></table>';
+        el.innerHTML = tableHtml;
+    } catch (error) {
+        el.innerHTML = '<div class="alert alert-error">Failed to load speakers: ' + error.message + '</div>';
+        console.error('Error fetching speakers:', error);
+    }
+}
+
+async function editSpeakerById(id) {
+    // This is a placeholder as the full speaker object is not returned in the list.
+    // A dedicated GET /api/speakers/:id would be better, but for now we re-fetch.
+    const data = await api('GET', `/api/speakers?event_id=${currentEventId}`);
+    const speaker = (data.speakers || []).find(s => s.id === id);
+    if (speaker) {
+        showSpeakerForm(speaker);
+    } else {
+        alert('Could not find speaker details.');
+    }
+}
+
+function showSpeakerForm(speaker) {
+    const isEdit = !!speaker;
+    const panel = document.getElementById('slide-panel');
+    panel.innerHTML = `
+        <h2>${isEdit ? 'Edit Speaker' : 'Add Speaker'}</h2>
+        <form id="speaker-form" onsubmit="handleSpeakerSubmit(event, ${isEdit ? speaker.id : null})">
+            <div class="form-group">
+                <label for="sp-full_name">Full Name *</label>
+                <input type="text" id="sp-full_name" name="full_name" required value="${(speaker && speaker.full_name) || ''}">
+            </div>
+            <div class="grid-2">
+                <div class="form-group">
+                    <label for="sp-title">Title</label>
+                    <input type="text" id="sp-title" name="title" value="${(speaker && speaker.title) || ''}">
+                </div>
+                <div class="form-group">
+                    <label for="sp-company">Company</label>
+                    <input type="text" id="sp-company" name="company" value="${(speaker && speaker.company) || ''}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="sp-email">Email</label>
+                <input type="email" id="sp-email" name="email" value="${(speaker && speaker.email) || ''}">
+            </div>
+            <div class="form-group">
+                <label for="sp-bio">Bio</label>
+                <textarea id="sp-bio" name="bio" rows="5">${(speaker && speaker.bio) || ''}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="sp-headshot">Headshot</label>
+                <input type="file" id="sp-headshot" name="headshot" accept="image/*">
+                ${isEdit && speaker.has_headshot ? `
+                    <div style="margin-top:8px;">
+                        <img src="/api/speakers/${speaker.id}/headshot" style="max-width:100px;max-height:100px;object-fit:cover;">
+                        <p style="font-size:11px;color:#666">Current headshot. Upload a new file to replace it.</p>
+                    </div>
+                ` : ''}
+            </div>
+            <button type="submit" class="btn-primary">${isEdit ? 'Save Changes' : 'Add Speaker'}</button>
+            <button type="button" class="btn-secondary" onclick="closePanel()" style="margin-left:8px;">Cancel</button>
+        </form>
+    `;
+    openPanel();
+}
+
+async function handleSpeakerSubmit(event, speakerId) {
+    event.preventDefault();
+    const form = document.getElementById('speaker-form');
+    const formData = new FormData(form);
+
+    if (!speakerId) {
+         formData.append('event_id', currentEventId);
+    }
+
+    const method = speakerId ? 'PUT' : 'POST';
+    const url = speakerId ? `/api/speakers/${speakerId}` : '/api/speakers';
+
+    const submitButton = form.querySelector('button[type="submit"]');
+    const originalButtonText = submitButton.textContent;
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+
+    try {
+        const response = await fetch(url, {
+            method: method,
+            body: formData
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+
+        await response.json();
+        closePanel();
+        renderSpeakers();
+    } catch (error) {
+        alert('Error saving speaker: ' + error.message);
+        console.error('Error:', error);
+    } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = originalButtonText;
+    }
+}
+
+async function deleteSpeaker(id) {
+    if (confirm('Are you sure you want to delete this speaker? This cannot be undone.')) {
+        try {
+            const response = await fetch(`/api/speakers/${id}`, { method: 'DELETE' });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+            renderSpeakers();
+        } catch (error) {
+            alert('Error deleting speaker: ' + error.message);
+            console.error('Error:', error);
+        }
+    }
+}
+
+
+// ── Panel helpers ─────────────────────────────────────────────────────────────
+function openPanel() { document.getElementById('panel-overlay').classList.add('open'); document.getElementById('slide-panel').classList.add('open'); }
+function closePanel() { document.getElementById('panel-overlay').classList.remove('open'); document.getElementById('slide-panel').classList.remove('open'); }
+
+// ── Expose functions globally for inline onclick handlers ────────────────────
+window.showSection = showSection;
+window.onEventChange = onEventChange;
+window.showNewEventForm = showNewEventForm;
+window.switchPanelTab = switchPanelTab;
+window.showStep2 = showStep2;
+window.generateProfile = generateProfile;
+window.saveEventWithProfile = saveEventWithProfile;
+window.saveEventDirect = saveEventDirect;
+window.saveEventEdit = saveEventEdit;
+window.saveEventProfile = saveEventProfile;
+window.regenerateProfileEdit = regenerateProfileEdit;
+window.renderSubmissions = renderSubmissions;
+window.renderSubTable = renderSubTable;
+window.showAddSubmission = showAddSubmission;
+window.saveNewSubmission = saveNewSubmission;
+window.viewSubmission = viewSubmission;
+window.saveNotes = saveNotes;
+window.editStatus = editStatus;
+window.editSubmission = editSubmission;
+window.saveEditedSubmission = saveEditedSubmission;
+window.saveStatus = saveStatus;
+window.scoreSubmission = scoreSubmission;
+window.enrichAbstract = enrichAbstract;
+window.copyEnrichedAbstract = copyEnrichedAbstract;
+window.exportCSV = exportCSV;
+window.renderReview = renderReview;
+window.reviewTab = reviewTab;
+window.toggleCompare = toggleCompare;
+window.scoreAllUnscored = scoreAllUnscored;
+window.renderSpeakers = renderSpeakers;
+window.showSpeakerForm = showSpeakerForm;
+window.editSpeakerById = editSpeakerById;
+window.handleSpeakerSubmit = handleSpeakerSubmit;
+window.deleteSpeaker = deleteSpeaker;
+window.openPanel = openPanel;
+window.closePanel = closePanel;
+window.populateSpeakerDropdown = populateSpeakerDropdown;
+window.updateAbstractCounter = updateAbstractCounter;
+window.toggleAbstractOverride = toggleAbstractOverride;
+
+function updateAbstractCounter() {
+  var textarea = document.getElementById('sf-abstract');
+  var counter = document.getElementById('abstract-counter');
+  if (textarea && counter) {
+    counter.textContent = textarea.value.length;
+  }
+}
+
+function toggleAbstractOverride() {
+  var checkbox = document.getElementById('abstract-override');
+  var textarea = document.getElementById('sf-abstract');
+  var limitSpan = document.getElementById('abstract-limit');
+  if (!checkbox || !textarea || !limitSpan) return;
+  if (checkbox.checked) {
+    textarea.maxLength = 1000;
+    limitSpan.textContent = '1000';
+  } else {
+    textarea.maxLength = 650;
+    limitSpan.textContent = '650';
+    if (textarea.value.length > 650) {
+      textarea.value = textarea.value.slice(0, 650);
+      updateAbstractCounter();
+    }
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderEventsList();
+addTopbarBtn('New Event', showNewEventForm);
+</script>
+</body>
+</html>
