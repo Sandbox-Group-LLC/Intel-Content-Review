@@ -245,6 +245,92 @@ async function ensureSchema() {
     console.log('[OK] submission_conflicts table');
   } catch(e) { console.log('[SKIP] submission_conflicts:', e.message); }
 
+  // ── PHASE 2: Memory Brain tables ────────────────────────────────────────────
+
+  // pgvector extension
+  try {
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+    console.log('[OK] pgvector extension');
+  } catch(e) { console.log('[SKIP] pgvector:', e.message); }
+
+  // event_memories — vectorized lessons from completed events
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS event_memories (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        category TEXT,
+        content TEXT,
+        embedding vector(768),
+        signal_strength FLOAT DEFAULT 1.0,
+        source TEXT DEFAULT 'manual',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+    console.log('[OK] event_memories table');
+  } catch(e) { console.log('[SKIP] event_memories:', e.message); }
+
+  // survey_responses — post-event survey data per session
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS survey_responses (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+        submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+        session_title TEXT,
+        session_satisfaction INTEGER,
+        business_relevance INTEGER,
+        speaker_quality INTEGER,
+        session_comments TEXT,
+        overall_event_value INTEGER,
+        nps_score INTEGER,
+        partner_select_lift TEXT,
+        respondent_role TEXT,
+        respondent_industry TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+    console.log('[OK] survey_responses table');
+  } catch(e) { console.log('[SKIP] survey_responses:', e.message); }
+
+  // speaker_history — cross-event speaker performance
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS speaker_history (
+        id SERIAL PRIMARY KEY,
+        full_name TEXT,
+        email TEXT UNIQUE,
+        events_count INTEGER DEFAULT 0,
+        avg_speaker_rating FLOAT,
+        avg_session_satisfaction FLOAT,
+        avg_business_relevance FLOAT,
+        sessions JSONB DEFAULT '[]',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+    console.log('[OK] speaker_history table');
+  } catch(e) { console.log('[SKIP] speaker_history:', e.message); }
+
+  // submission_versions — version history per submission
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS submission_versions (
+        id SERIAL PRIMARY KEY,
+        submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+        version_number INTEGER,
+        snapshot JSONB,
+        ai_score JSONB,
+        edited_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+    console.log('[OK] submission_versions table');
+  } catch(e) { console.log('[SKIP] submission_versions:', e.message); }
+
+  // Add memory-augmented scoring fields to submissions
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS memory_insights JSONB`; console.log('[OK] memory_insights'); } catch(e) { console.log('[SKIP] memory_insights:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1`; console.log('[OK] version_number'); } catch(e) { console.log('[SKIP] version_number:', e.message); }
+
   // Create submission_speakers junction table for many-to-many relationship
   console.log('[MIGRATION] Creating submission_speakers junction table...');
   try {
@@ -420,6 +506,56 @@ app.get('/api/events', async function (req, res) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// ─── VOYAGER AI EMBEDDING CLIENT ─────────────────────────────────────────────
+
+async function generateEmbedding(text) {
+  var VOYAGER_API_KEY = process.env.VOYAGER_API_KEY;
+  if (!VOYAGER_API_KEY) {
+    console.log('[Voyager] No API key — skipping embedding');
+    return null;
+  }
+  try {
+    var axios = require('axios');
+    var response = await axios.post('https://api.voyageai.com/v1/embeddings', {
+      input: text,
+      model: 'voyage-3'
+    }, {
+      headers: {
+        'Authorization': 'Bearer ' + VOYAGER_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+    return response.data.data[0].embedding;
+  } catch(e) {
+    console.error('[Voyager] Embedding error:', e.message);
+    return null;
+  }
+}
+
+async function searchMemories(embedding, eventId, limit) {
+  if (!embedding) return [];
+  var sql = getDb();
+  limit = limit || 5;
+  try {
+    // Cosine similarity search using pgvector
+    var embStr = '[' + embedding.join(',') + ']';
+    var results = await sql`
+      SELECT id, category, content, signal_strength, source,
+             1 - (embedding <=> ${embStr}::vector) AS similarity
+      FROM event_memories
+      WHERE event_id = ${eventId}
+        AND embedding IS NOT NULL
+      ORDER BY embedding <=> ${embStr}::vector
+      LIMIT ${limit}
+    `;
+    return results.filter(function(r) { return r.similarity > 0.5; });
+  } catch(e) {
+    console.error('[Memory] Search error:', e.message);
+    return [];
+  }
+}
 
 // ─── GATE EVALUATION ENGINE ──────────────────────────────────────────────────
 
@@ -838,6 +974,22 @@ app.post('/api/submissions/:id/score', async function (req, res) {
     if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
     var evt = evtResult[0];
     if (!evt.ai_system_prompt) return res.status(400).json({ ok: false, error: 'AI system prompt not configured for this event.' });
+    // ── Memory-augmented scoring: retrieve relevant past lessons ──
+    var memoryContext = '';
+    var memoryInsights = [];
+    try {
+      var scoringText = (sub.title || '') + ' ' + (sub.abstract || '') + ' ' + (sub.key_topics || '');
+      var scoringEmbedding = await generateEmbedding(scoringText);
+      var relevantMemories = await searchMemories(scoringEmbedding, evt.id, 5);
+      if (relevantMemories.length > 0) {
+        memoryContext = '\n\nPAST EVENT INSIGHTS (factor these into your scoring):\n';
+        relevantMemories.forEach(function(m, idx) {
+          memoryContext += (idx + 1) + '. [' + m.category.toUpperCase() + '] ' + m.content + '\n';
+          memoryInsights.push({ id: m.id, category: m.category, content: m.content.slice(0, 150), similarity: parseFloat(m.similarity) });
+        });
+      }
+    } catch(me) { console.log('[Memory] retrieval skipped:', me.message); }
+
     var userPrompt = [
       'Title: ' + (sub.title || ''),
       'Abstract: ' + (sub.abstract || ''),
@@ -848,9 +1000,9 @@ app.post('/api/submissions/:id/score', async function (req, res) {
       'Business Challenge: ' + (sub.business_challenge || ''),
       'Speakers: ' + (sub.speaker_names || 'N/A')
     ].join('\n');
-    var scorecard = await callGemini(evt.ai_system_prompt, userPrompt, true);
-    await sql`UPDATE submissions SET ai_score = ${scorecard} WHERE id = ${id}`;
-    res.json({ ok: true, scorecard: scorecard });
+    var scorecard = await callClaude(evt.ai_system_prompt + memoryContext, userPrompt, true);
+    await sql`UPDATE submissions SET ai_score = ${JSON.stringify(scorecard)}, memory_insights = ${JSON.stringify(memoryInsights)} WHERE id = ${id}`;
+    res.json({ ok: true, scorecard: scorecard, memory_insights: memoryInsights });
   } catch (err) {
     console.error('[submissions/score]', err.message);
     res.status(500).json({ ok: false, error: err.message });
@@ -976,9 +1128,332 @@ app.put('/api/submissions/:id', async function (req, res) {
       }
     }
     
+    // ── Save version snapshot ──
+    try {
+      var sub = result[0];
+      var versionNum = (sub.version_number || 1);
+      await sql`
+        INSERT INTO submission_versions (submission_id, version_number, snapshot, ai_score, edited_by)
+        VALUES (${id}, ${versionNum}, ${JSON.stringify(sub)}, ${sub.ai_score ? JSON.stringify(sub.ai_score) : null}, 'reviewer')
+      `;
+      // Increment version number
+      await sql`UPDATE submissions SET version_number = ${versionNum + 1} WHERE id = ${id}`;
+    } catch(ve) { console.log('[version]', ve.message); }
+
     res.json({ ok: true, submission: result[0], gate_warnings: gateBlockedMessages });
   } catch (err) {
     console.error('[api/submissions PUT]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── PHASE 2: MEMORY BRAIN API ──────────────────────────────────────────────
+
+// GET all memories for an event
+app.get('/api/events/:id/memories', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var category = req.query.category || null;
+    var memories = category
+      ? await sql`SELECT id, category, content, signal_strength, source, created_at FROM event_memories WHERE event_id = ${id} AND category = ${category} ORDER BY signal_strength DESC, created_at DESC`
+      : await sql`SELECT id, category, content, signal_strength, source, created_at FROM event_memories WHERE event_id = ${id} ORDER BY signal_strength DESC, created_at DESC`;
+    res.json({ ok: true, memories: memories });
+  } catch(err) {
+    console.error('[api/memories GET]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST manually add a memory
+app.post('/api/events/:id/memories', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var { category, content, source } = req.body;
+    if (!content) return res.status(400).json({ ok: false, error: 'content required' });
+    var embedding = await generateEmbedding(content);
+    var embStr = embedding ? '[' + embedding.join(',') + ']' : null;
+    var result = embStr
+      ? await sql`INSERT INTO event_memories (event_id, category, content, embedding, source) VALUES (${id}, ${category || 'manual'}, ${content}, ${embStr}::vector, ${source || 'manual'}) RETURNING *`
+      : await sql`INSERT INTO event_memories (event_id, category, content, source) VALUES (${id}, ${category || 'manual'}, ${content}, ${source || 'manual'}) RETURNING *`;
+    res.json({ ok: true, memory: result[0] });
+  } catch(err) {
+    console.error('[api/memories POST]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT upvote/downvote memory signal strength
+app.put('/api/memories/:id/signal', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var direction = req.body.direction; // 'up' or 'down'
+    var delta = direction === 'up' ? 0.2 : -0.2;
+    var result = await sql`
+      UPDATE event_memories
+      SET signal_strength = GREATEST(0.1, LEAST(3.0, signal_strength + ${delta}))
+      WHERE id = ${id}
+      RETURNING *
+    `;
+    if (!result.length) return res.status(404).json({ ok: false, error: 'Memory not found' });
+    res.json({ ok: true, memory: result[0] });
+  } catch(err) {
+    console.error('[api/memories signal]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE a memory
+app.delete('/api/memories/:id', async function(req, res) {
+  try {
+    var sql = getDb();
+    await sql`DELETE FROM event_memories WHERE id = ${req.params.id}`;
+    res.json({ ok: true });
+  } catch(err) {
+    console.error('[api/memories DELETE]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST import survey CSV for an event
+app.post('/api/events/:id/memories/import-survey', upload.single('survey'), async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+    if (!req.file) return res.status(400).json({ ok: false, error: 'CSV file required' });
+
+    var csvText = req.file.buffer.toString('utf-8');
+    var lines = csvText.split('\n').filter(function(l) { return l.trim(); });
+    if (lines.length < 2) return res.status(400).json({ ok: false, error: 'CSV must have header row and data' });
+
+    // Parse headers
+    var headers = lines[0].split(',').map(function(h) { return h.trim().replace(/"/g, '').toLowerCase(); });
+
+    // Column mapping — flexible, matches Intel/Evolio export format
+    function findCol(names) {
+      for (var i = 0; i < names.length; i++) {
+        var idx = headers.findIndex(function(h) { return h.includes(names[i]); });
+        if (idx >= 0) return idx;
+      }
+      return -1;
+    }
+
+    var colMap = {
+      session_title: findCol(['session', 'title', 'name']),
+      satisfaction: findCol(['satisfaction', 'overall sat']),
+      relevance: findCol(['relevance', 'useful', 'business']),
+      speaker: findCol(['speaker', 'present']),
+      comments: findCol(['comment', 'feedback', 'additional']),
+      overall_value: findCol(['overall value', 'event value']),
+      nps: findCol(['nps', 'recommend', 'likely']),
+      partner_lift: findCol(['partner', 'select intel', 'likely to select']),
+      role: findCol(['role', 'title', 'job']),
+      industry: findCol(['industry', 'sector'])
+    };
+
+    var imported = 0;
+    var skipped = 0;
+    var rows = [];
+
+    for (var i = 1; i < lines.length; i++) {
+      var cols = lines[i].split(',').map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
+      if (cols.length < 2) continue;
+
+      var sessionTitle = colMap.session_title >= 0 ? cols[colMap.session_title] : null;
+
+      // Fuzzy match session title to a submission
+      var submissionId = null;
+      if (sessionTitle) {
+        var subs = await sql`SELECT id, title FROM submissions WHERE event_id = ${eventId}`;
+        var titleLower = sessionTitle.toLowerCase();
+        var match = subs.find(function(s) {
+          return s.title && (s.title.toLowerCase().includes(titleLower) || titleLower.includes(s.title.toLowerCase().slice(0, 20)));
+        });
+        if (match) submissionId = match.id;
+      }
+
+      var row = {
+        event_id: eventId,
+        submission_id: submissionId,
+        session_title: sessionTitle,
+        session_satisfaction: colMap.satisfaction >= 0 ? parseInt(cols[colMap.satisfaction]) || null : null,
+        business_relevance: colMap.relevance >= 0 ? parseInt(cols[colMap.relevance]) || null : null,
+        speaker_quality: colMap.speaker >= 0 ? parseInt(cols[colMap.speaker]) || null : null,
+        session_comments: colMap.comments >= 0 ? cols[colMap.comments] : null,
+        overall_event_value: colMap.overall_value >= 0 ? parseInt(cols[colMap.overall_value]) || null : null,
+        nps_score: colMap.nps >= 0 ? parseInt(cols[colMap.nps]) || null : null,
+        partner_select_lift: colMap.partner_lift >= 0 ? cols[colMap.partner_lift] : null,
+        respondent_role: colMap.role >= 0 ? cols[colMap.role] : null,
+        respondent_industry: colMap.industry >= 0 ? cols[colMap.industry] : null
+      };
+      rows.push(row);
+    }
+
+    // Insert all rows
+    for (var ri = 0; ri < rows.length; ri++) {
+      var r = rows[ri];
+      try {
+        await sql`
+          INSERT INTO survey_responses (event_id, submission_id, session_title, session_satisfaction, business_relevance, speaker_quality, session_comments, overall_event_value, nps_score, partner_select_lift, respondent_role, respondent_industry)
+          VALUES (${r.event_id}, ${r.submission_id}, ${r.session_title}, ${r.session_satisfaction}, ${r.business_relevance}, ${r.speaker_quality}, ${r.session_comments}, ${r.overall_event_value}, ${r.nps_score}, ${r.partner_select_lift}, ${r.respondent_role}, ${r.respondent_industry})
+        `;
+        imported++;
+      } catch(ie) { skipped++; }
+    }
+
+    // Auto-update speaker history from survey data
+    try {
+      var speakerSubs = await sql`
+        SELECT s.content_lead, AVG(sr.speaker_quality) as avg_quality, AVG(sr.session_satisfaction) as avg_sat, AVG(sr.business_relevance) as avg_rel, COUNT(*) as responses
+        FROM survey_responses sr
+        JOIN submissions s ON s.id = sr.submission_id
+        WHERE sr.event_id = ${eventId} AND s.content_lead IS NOT NULL AND sr.speaker_quality IS NOT NULL
+        GROUP BY s.content_lead
+      `;
+      for (var si = 0; si < speakerSubs.length; si++) {
+        var sp = speakerSubs[si];
+        await sql`
+          INSERT INTO speaker_history (full_name, avg_speaker_rating, avg_session_satisfaction, avg_business_relevance, events_count)
+          VALUES (${sp.content_lead}, ${parseFloat(sp.avg_quality)}, ${parseFloat(sp.avg_sat)}, ${parseFloat(sp.avg_rel)}, 1)
+          ON CONFLICT (email) DO UPDATE SET
+            avg_speaker_rating = (speaker_history.avg_speaker_rating + EXCLUDED.avg_speaker_rating) / 2,
+            avg_session_satisfaction = (speaker_history.avg_session_satisfaction + EXCLUDED.avg_session_satisfaction) / 2,
+            events_count = speaker_history.events_count + 1,
+            updated_at = NOW()
+        `;
+      }
+    } catch(she) { console.log('[speaker_history]', she.message); }
+
+    res.json({ ok: true, imported: imported, skipped: skipped, total_rows: rows.length });
+  } catch(err) {
+    console.error('[api/import-survey]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST extract lessons from survey data and store as memories
+app.post('/api/events/:id/memories/extract-lessons', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+
+    // Get event info
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${eventId}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+
+    // Get survey aggregate stats
+    var stats = await sql`
+      SELECT
+        AVG(session_satisfaction) as avg_satisfaction,
+        AVG(business_relevance) as avg_relevance,
+        AVG(speaker_quality) as avg_speaker,
+        AVG(nps_score) as avg_nps,
+        COUNT(*) as total_responses,
+        COUNT(DISTINCT submission_id) as sessions_rated
+      FROM survey_responses WHERE event_id = ${eventId}
+    `;
+
+    // Get per-session stats
+    var sessionStats = await sql`
+      SELECT sr.session_title, s.track, s.bu, s.format,
+        AVG(sr.session_satisfaction) as avg_sat,
+        AVG(sr.business_relevance) as avg_rel,
+        AVG(sr.speaker_quality) as avg_spk,
+        COUNT(*) as responses,
+        STRING_AGG(sr.session_comments, ' | ') as all_comments
+      FROM survey_responses sr
+      LEFT JOIN submissions s ON s.id = sr.submission_id
+      WHERE sr.event_id = ${eventId}
+      GROUP BY sr.session_title, s.track, s.bu, s.format
+      ORDER BY avg_sat DESC
+    `;
+
+    var systemPrompt = 'You are an event intelligence analyst. Extract 5-10 specific, actionable lessons from post-event survey data. Each lesson should be concrete enough to influence future session selection decisions. Return ONLY valid JSON: { "lessons": [{ "category": "what_worked|what_didnt|speaker_insight|topic_trend|audience_signal|kpi_outcome", "content": "specific lesson in one clear sentence", "signal_strength": 0.5-2.0 }] }';
+
+    var userPrompt = 'Event: ' + evt.name + '\n\nOverall stats: ' + JSON.stringify(stats[0]) + '\n\nPer-session data: ' + JSON.stringify(sessionStats.slice(0, 20));
+
+    var lessonsResult = await callClaude(systemPrompt, userPrompt, true);
+    var lessons = lessonsResult.lessons || [];
+
+    var stored = 0;
+    for (var li = 0; li < lessons.length; li++) {
+      var lesson = lessons[li];
+      var embedding = await generateEmbedding(lesson.content);
+      var embStr = embedding ? '[' + embedding.join(',') + ']' : null;
+      if (embStr) {
+        await sql`
+          INSERT INTO event_memories (event_id, category, content, embedding, signal_strength, source)
+          VALUES (${eventId}, ${lesson.category}, ${lesson.content}, ${embStr}::vector, ${lesson.signal_strength || 1.0}, 'auto_extracted')
+        `;
+      } else {
+        await sql`
+          INSERT INTO event_memories (event_id, category, content, signal_strength, source)
+          VALUES (${eventId}, ${lesson.category}, ${lesson.content}, ${lesson.signal_strength || 1.0}, 'auto_extracted')
+        `;
+      }
+      stored++;
+    }
+
+    res.json({ ok: true, lessons_extracted: stored, lessons: lessons });
+  } catch(err) {
+    console.error('[api/extract-lessons]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET submission version history
+app.get('/api/submissions/:id/versions', async function(req, res) {
+  try {
+    var sql = getDb();
+    var versions = await sql`
+      SELECT id, version_number, edited_by, created_at,
+        snapshot->>'title' as title,
+        snapshot->>'status' as status
+      FROM submission_versions
+      WHERE submission_id = ${req.params.id}
+      ORDER BY version_number DESC
+    `;
+    res.json({ ok: true, versions: versions });
+  } catch(err) {
+    console.error('[api/versions]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET survey results for an event
+app.get('/api/events/:id/survey', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+    var summary = await sql`
+      SELECT
+        COUNT(*) as total_responses,
+        ROUND(AVG(session_satisfaction)::numeric, 1) as avg_satisfaction,
+        ROUND(AVG(business_relevance)::numeric, 1) as avg_relevance,
+        ROUND(AVG(speaker_quality)::numeric, 1) as avg_speaker_quality,
+        ROUND(AVG(nps_score)::numeric, 1) as avg_nps,
+        COUNT(CASE WHEN overall_event_value >= 4 THEN 1 END) * 100 / NULLIF(COUNT(*), 0) as pct_high_value,
+        COUNT(CASE WHEN partner_select_lift = 'Yes' THEN 1 END) * 100 / NULLIF(COUNT(*), 0) as pct_partner_lift
+      FROM survey_responses WHERE event_id = ${eventId}
+    `;
+    var bySession = await sql`
+      SELECT sr.session_title, s.id as submission_id, s.track, s.bu,
+        COUNT(*) as responses,
+        ROUND(AVG(sr.session_satisfaction)::numeric, 1) as avg_satisfaction,
+        ROUND(AVG(sr.business_relevance)::numeric, 1) as avg_relevance,
+        ROUND(AVG(sr.speaker_quality)::numeric, 1) as avg_speaker_quality
+      FROM survey_responses sr
+      LEFT JOIN submissions s ON s.id = sr.submission_id
+      WHERE sr.event_id = ${eventId}
+      GROUP BY sr.session_title, s.id, s.track, s.bu
+      ORDER BY avg_satisfaction DESC NULLS LAST
+    `;
+    res.json({ ok: true, summary: summary[0], by_session: bySession });
+  } catch(err) {
+    console.error('[api/survey GET]', err.message);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
