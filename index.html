@@ -62,7 +62,7 @@ tr:hover td{background:#f9f9f9;}
 .slide-panel h2{font-weight:700;font-size:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #EAEAEA;}
 .dim-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;}
 .dim-score{font-weight:700;font-size:14px;}
-.dim-rationale{font-size:12px;color:#666;margin-top:2px;}
+.dim-rationale{font-size:12px;color:#666;margin-top:2px;}.mem-tab{background:none;border:none;border-bottom:3px solid transparent;padding:10px 16px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;color:#666;}.mem-tab.active{border-bottom-color:#00AAE8;color:#000864;font-weight:700;}.mem-tab:hover{color:#000864;}
 .tabs{display:flex;border-bottom:2px solid #EAEAEA;margin-bottom:20px;}
 .tab{padding:8px 16px;cursor:pointer;font-weight:500;font-size:13px;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px;}
 .tab.active{color:#00AAE8;border-bottom-color:#00AAE8;}
@@ -97,6 +97,7 @@ tr:hover td{background:#f9f9f9;}
     <a onclick="showSection('submissions')">Submissions</a>
     <a onclick="showSection('review')">Review</a>
     <a onclick="showSection('speakers')">Speakers</a>
+    <a onclick="showSection('memory')">Memory</a>
   </nav>
   <div class="event-selector">
     <label>Current Event</label>
@@ -125,6 +126,10 @@ tr:hover td{background:#f9f9f9;}
     <div id="section-speakers" class="section">
       <div id="speakers-content"></div>
     </div>
+    <!-- MEMORY SECTION -->
+    <div id="section-memory" class="section">
+      <div id="memory-content"></div>
+    </div>
   </div>
 </div>
 
@@ -148,7 +153,7 @@ function showSection(name) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.getElementById('section-' + name).classList.add('active');
   document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
-    a.classList.toggle('active', ['events','submissions','review','speakers'][i] === name);
+    a.classList.toggle('active', ['events','submissions','review','speakers','memory'][i] === name);
   });
   document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
   document.getElementById('topbar-action').innerHTML = '';
@@ -156,6 +161,7 @@ function showSection(name) {
   if (name === 'submissions') { renderSubmissions(); }
   if (name === 'review') { renderReview(); }
   if (name === 'speakers') { renderSpeakers(); addTopbarBtn('Add Speaker', () => showSpeakerForm()); }
+  if (name === 'memory') { renderMemory(); }
 }
 
 function addTopbarBtn(label, fn) {
@@ -210,6 +216,7 @@ function onEventChange() {
   if (sect && sect.id === 'section-submissions') renderSubmissions();
   if (sect && sect.id === 'section-review') renderReview();
   if (sect && sect.id === 'section-speakers') renderSpeakers();
+  if (sect && sect.id === 'section-memory') renderMemory();
 }
 
 async function renderEventsList() {
@@ -671,7 +678,19 @@ async function viewSubmission(id) {
     (score.gaps||[]).forEach(function(g){ scoreHtml += '<div style="font-size:12px;margin-bottom:2px">&bull; ' + g + '</div>'; });
     scoreHtml += '</div><div style="margin-top:12px;padding:12px;background:#f9f9f9;border:1px solid #EAEAEA">';
     scoreHtml += '<div style="font-weight:700">' + (score.recommendation||'') + '</div>';
-    scoreHtml += '<div style="font-size:12px;color:#666;margin-top:4px">' + (score.recommendation_rationale||'') + '</div></div></div>';
+    scoreHtml += '<div style="font-size:12px;color:#666;margin-top:4px">' + (score.recommendation_rationale||'') + '</div></div>';
+    // Past Event Insights from memory brain
+    if (s.memory_insights && s.memory_insights.length > 0) {
+      scoreHtml += '<div style="margin-top:12px;padding:12px;background:#EEF6FB;border:1px solid #00AAE8">';
+      scoreHtml += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#000864;margin-bottom:8px">PAST EVENT INSIGHTS APPLIED</div>';
+      s.memory_insights.forEach(function(m) {
+        scoreHtml += '<div style="font-size:12px;margin-bottom:4px;display:flex;gap:6px">' +
+          '<span style="background:#000864;color:#fff;font-size:10px;padding:1px 6px;font-weight:700;white-space:nowrap">' + (m.category||'').replace(/_/g,' ').toUpperCase() + '</span>' +
+          '<span style="color:#2E2F2F">' + (m.content||'') + '</span></div>';
+      });
+      scoreHtml += '</div>';
+    }
+    scoreHtml += '</div>';
   }
   var panel = document.getElementById('slide-panel');
   panel.innerHTML =
@@ -1251,6 +1270,212 @@ window.showNewEventForm = showNewEventForm;
 window.switchPanelTab = switchPanelTab;
 window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
+// ─── MEMORY BRAIN UI ─────────────────────────────────────────────────────────
+
+var memoryTab = 'browse'; // browse | survey | speakers
+
+async function renderMemory() {
+  var el = document.getElementById('memory-content');
+  if (!currentEventId) { el.innerHTML = '<p style="color:#666;padding:24px">Select an event to view memory.</p>'; return; }
+
+  el.innerHTML = '<div style="display:flex;gap:0;margin-bottom:24px;border-bottom:2px solid #EAEAEA">' +
+    '<button onclick="switchMemoryTab('browse')" id="mtab-browse" class="mem-tab ' + (memoryTab==='browse'?'active':'') + '">Memory Browser</button>' +
+    '<button onclick="switchMemoryTab('survey')" id="mtab-survey" class="mem-tab ' + (memoryTab==='survey'?'active':'') + '">Survey Import</button>' +
+    '<button onclick="switchMemoryTab('speakers')" id="mtab-speakers" class="mem-tab ' + (memoryTab==='speakers'?'active':'') + '">Speaker History</button>' +
+  '</div>' +
+  '<div id="memory-tab-content"></div>';
+
+  renderMemoryTab();
+}
+
+function switchMemoryTab(tab) {
+  memoryTab = tab;
+  document.querySelectorAll('.mem-tab').forEach(function(t) { t.classList.remove('active'); });
+  var btn = document.getElementById('mtab-' + tab);
+  if (btn) btn.classList.add('active');
+  renderMemoryTab();
+}
+
+async function renderMemoryTab() {
+  var el = document.getElementById('memory-tab-content');
+  if (!el) return;
+
+  if (memoryTab === 'browse') {
+    el.innerHTML = '<div style="color:#666;font-size:13px">Loading memories...</div>';
+    var data = await api('GET', '/api/events/' + currentEventId + '/memories');
+    if (!data.ok) { el.innerHTML = '<p style="color:#CC0000">Error loading memories.</p>'; return; }
+    var memories = data.memories || [];
+
+    var addForm = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA;margin-bottom:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">ADD MEMORY</div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:8px">' +
+        '<select id="mem-cat" style="flex:0 0 160px">' +
+          '<option value="what_worked">What Worked</option>' +
+          '<option value="what_didnt">What Didn't</option>' +
+          '<option value="speaker_insight">Speaker Insight</option>' +
+          '<option value="topic_trend">Topic Trend</option>' +
+          '<option value="audience_signal">Audience Signal</option>' +
+          '<option value="kpi_outcome">KPI Outcome</option>' +
+        '</select>' +
+        '<input id="mem-content" placeholder="Enter memory..." style="flex:1">' +
+        '<button class="btn-primary" onclick="addMemory()">Add</button>' +
+      '</div>' +
+    '</div>';
+
+    if (memories.length === 0) {
+      el.innerHTML = addForm + '<p style="color:#666;padding:16px 0">No memories yet. Import survey data or add manually.</p>';
+      return;
+    }
+
+    var categories = ['what_worked','what_didnt','speaker_insight','topic_trend','audience_signal','kpi_outcome','manual','auto_extracted'];
+    var catColors = { what_worked:'#007A3D', what_didnt:'#CC0000', speaker_insight:'#000864', topic_trend:'#00AAE8', audience_signal:'#B8860B', kpi_outcome:'#2E2F2F', manual:'#6B6B6B', auto_extracted:'#000864' };
+
+    var html = addForm;
+    html += '<div style="margin-bottom:8px;font-size:12px;color:#666">' + memories.length + ' memories · sorted by signal strength</div>';
+
+    memories.forEach(function(m) {
+      var catColor = catColors[m.category] || '#6B6B6B';
+      var signalPct = Math.round((m.signal_strength / 3.0) * 100);
+      html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px">' +
+        '<span style="background:' + catColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;white-space:nowrap;margin-top:2px">' + (m.category||'').replace(/_/g,' ').toUpperCase() + '</span>' +
+        '<div style="flex:1;font-size:13px;color:#2E2F2F">' + escHtml(m.content) + '</div>' +
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:80px">' +
+          '<div style="font-size:10px;color:#666">Signal</div>' +
+          '<div style="background:#EAEAEA;width:60px;height:6px;position:relative">' +
+            '<div style="background:#00AAE8;width:' + signalPct + '%;height:100%"></div>' +
+          '</div>' +
+          '<div style="display:flex;gap:4px">' +
+            '<button onclick="signalMemory(' + m.id + ','up')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">▲</button>' +
+            '<button onclick="signalMemory(' + m.id + ','down')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">▼</button>' +
+            '<button onclick="deleteMemory(' + m.id + ')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px;color:#CC0000">✕</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    });
+    el.innerHTML = html;
+
+  } else if (memoryTab === 'survey') {
+    el.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">IMPORT POST-EVENT SURVEY</div>' +
+      '<p style="font-size:13px;color:#666;margin-bottom:16px">Upload a CSV export from your post-event survey platform (Evolio, Cvent, etc.). Column headers are auto-detected and mapped to Intel KPI fields. Session titles are fuzzy-matched to submission records.</p>' +
+      '<div style="margin-bottom:12px">' +
+        '<label style="font-weight:700;font-size:12px">Survey CSV File</label>' +
+        '<input type="file" id="survey-file" accept=".csv" style="display:block;margin-top:6px">' +
+      '</div>' +
+      '<button class="btn-primary" onclick="importSurvey()">Import Survey Data</button>' +
+      '<div id="survey-import-result" style="margin-top:12px"></div>' +
+      '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #EAEAEA">' +
+        '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px">EXTRACT LESSONS FROM SURVEY</div>' +
+        '<p style="font-size:13px;color:#666;margin-bottom:12px">After importing survey data, run AI lesson extraction to automatically generate memory entries from the results.</p>' +
+        '<button class="btn-secondary" onclick="extractLessons()">Extract Lessons with AI</button>' +
+        '<div id="lesson-extract-result" style="margin-top:8px"></div>' +
+      '</div>' +
+      '<div id="survey-stats-container" style="margin-top:20px"></div>' +
+    '</div>';
+    loadSurveyStats();
+
+  } else if (memoryTab === 'speakers') {
+    var data = await api('GET', '/api/speakers?event_id=' + currentEventId);
+    var speakers = (data.speakers || []).filter(function(s) { return s.full_name; });
+    if (speakers.length === 0) {
+      el.innerHTML = '<p style="color:#666;padding:16px 0">No speaker history available yet. Speaker performance data is auto-populated from survey imports.</p>';
+      return;
+    }
+    var html = '<div style="font-size:12px;color:#666;margin-bottom:12px">Speaker performance data sourced from post-event surveys.</div>';
+    speakers.forEach(function(sp) {
+      html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:center;gap:16px">' +
+        '<div style="font-weight:700;font-size:14px;flex:1">' + escHtml(sp.full_name) + '</div>' +
+        '<div style="font-size:12px;color:#666">' + (sp.title||'') + (sp.company ? ' · ' + sp.company : '') + '</div>' +
+      '</div>';
+    });
+    el.innerHTML = html;
+  }
+}
+
+async function addMemory() {
+  var cat = document.getElementById('mem-cat').value;
+  var content = document.getElementById('mem-content').value.trim();
+  if (!content) return;
+  var r = await api('POST', '/api/events/' + currentEventId + '/memories', { category: cat, content: content });
+  if (r.ok) { document.getElementById('mem-content').value = ''; renderMemoryTab(); }
+  else alert(r.error || 'Failed to add memory');
+}
+
+async function signalMemory(id, direction) {
+  await api('PUT', '/api/memories/' + id + '/signal', { direction: direction });
+  renderMemoryTab();
+}
+
+async function deleteMemory(id) {
+  if (!confirm('Delete this memory?')) return;
+  await api('DELETE', '/api/memories/' + id);
+  renderMemoryTab();
+}
+
+async function importSurvey() {
+  var file = document.getElementById('survey-file').files[0];
+  if (!file) { alert('Please select a CSV file'); return; }
+  var el = document.getElementById('survey-import-result');
+  el.innerHTML = '<div style="color:#666;font-size:13px">Importing...</div>';
+  var form = new FormData();
+  form.append('survey', file);
+  try {
+    var r = await fetch('/api/events/' + currentEventId + '/memories/import-survey', { method: 'POST', body: form });
+    var data = await r.json();
+    if (data.ok) {
+      el.innerHTML = '<div style="color:#007A3D;font-weight:700">✓ Imported ' + data.imported + ' responses (' + data.skipped + ' skipped). ' + data.total_rows + ' total rows processed.</div>';
+      loadSurveyStats();
+    } else {
+      el.innerHTML = '<div style="color:#CC0000">' + (data.error || 'Import failed') + '</div>';
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="color:#CC0000">Error: ' + e.message + '</div>';
+  }
+}
+
+async function extractLessons() {
+  var el = document.getElementById('lesson-extract-result');
+  el.innerHTML = '<div style="color:#666;font-size:13px">Extracting lessons with AI...</div>';
+  var r = await api('POST', '/api/events/' + currentEventId + '/memories/extract-lessons');
+  if (r.ok) {
+    el.innerHTML = '<div style="color:#007A3D;font-weight:700">✓ Extracted ' + r.lessons_extracted + ' lessons and stored in memory brain.</div>';
+    if (memoryTab === 'survey') setTimeout(function() { switchMemoryTab('browse'); }, 1500);
+  } else {
+    el.innerHTML = '<div style="color:#CC0000">' + (r.error || 'Extraction failed') + '</div>';
+  }
+}
+
+async function loadSurveyStats() {
+  var el = document.getElementById('survey-stats-container');
+  if (!el) return;
+  var data = await api('GET', '/api/events/' + currentEventId + '/survey');
+  if (!data.ok || !data.summary || data.summary.total_responses === '0') {
+    el.innerHTML = '<div style="color:#666;font-size:12px">No survey data imported yet.</div>';
+    return;
+  }
+  var s = data.summary;
+  var kpiTargets = { avg_satisfaction: { label: 'Avg Session Satisfaction', target: 4.0, max: 5 }, avg_relevance: { label: 'Avg Business Relevance', target: 3.75, max: 5 }, avg_speaker_quality: { label: 'Avg Speaker Quality', target: 4.0, max: 5 }, avg_nps: { label: 'Avg NPS', target: 7.5, max: 10 }, pct_high_value: { label: '% High Event Value', target: 80, max: 100 }, pct_partner_lift: { label: '% Partner Select Lift', target: 75, max: 100 } };
+  var html = '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">SURVEY RESULTS — ' + s.total_responses + ' RESPONSES</div>';
+  Object.keys(kpiTargets).forEach(function(k) {
+    var kpi = kpiTargets[k];
+    var val = parseFloat(s[k]) || 0;
+    var pct = Math.round((val / kpi.max) * 100);
+    var targetPct = Math.round((kpi.target / kpi.max) * 100);
+    var color = val >= kpi.target ? '#007A3D' : '#CC0000';
+    html += '<div style="margin-bottom:10px">' +
+      '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">' +
+        '<span>' + kpi.label + '</span>' +
+        '<span style="font-weight:700;color:' + color + '">' + val + ' <span style="color:#666;font-weight:400">/ target ' + kpi.target + '</span></span>' +
+      '</div>' +
+      '<div style="background:#EAEAEA;height:8px;position:relative">' +
+        '<div style="background:' + color + ';width:' + pct + '%;height:100%"></div>' +
+        '<div style="position:absolute;top:0;left:' + targetPct + '%;width:2px;height:100%;background:#2E2F2F"></div>' +
+      '</div>' +
+    '</div>';
+  });
+  el.innerHTML = '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA">' + html + '</div>';
+}
+
 window.saveEventWithProfile = saveEventWithProfile;
 window.saveEventDirect = saveEventDirect;
 window.saveEventEdit = saveEventEdit;
