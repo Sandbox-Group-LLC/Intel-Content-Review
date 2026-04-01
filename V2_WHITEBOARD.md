@@ -14,6 +14,10 @@
 | 4 | Gate enforcement strictness | **Three-level enforcement:** 0–49 = Pass (no block), 50–79 = Warn (advisory), 80–100 = Block (hard stop on status advance) |
 | 5 | Notifications | **Email first** — Intel uses Teams/O365, all addresses are `first.last@intel.com` format |
 | 6 | Auth | **Magic link for v2**, Microsoft Entra ID integration planned for v3 (noted: Entra ID = barf) |
+| 7 | Transactional email | **Resend** — API key already in env vars |
+| 8 | Voyager AI access | **VOYAGER_API_KEY** already set in Render env vars |
+| 9 | Gate deadline dates | **Admin-defined per event** — dates change constantly, no auto-derivation |
+| 10 | Ownership | **Claude owns this repo going forward** — direct commits via GitHub API, Render auto-deploy on every push to main |
 
 ---
 
@@ -139,6 +143,14 @@ Survey data is exported from Evolio as CSV. The import pipeline will:
 
 ### PHASE 1 — Quality Gates & Compliance Engine
 *Goal: Make it impossible to approve a low-quality or non-compliant submission.*
+
+#### 1.0 Gate Deadline Fields (Admin-Defined Per Event)
+Three deadline date fields added to event creation/edit form:
+- **Gate 50% deadline** — date by which all submissions must clear the 50% gate
+- **Gate 75% deadline** — date by which all submissions must clear the 75% gate  
+- **Gate 90% deadline** — date by which all submissions must clear the 90% gate
+
+Deadlines surface in: program health dashboard readiness timeline, email reminder notifications (7 days out), and the gate checklist on each submission. Stored as `gate_50_deadline`, `gate_75_deadline`, `gate_90_deadline` TEXT columns on the events table.
 
 #### 1.1 Gate Score System (Pass / Warn / Block)
 
@@ -346,7 +358,7 @@ All notifications via email. Intel addresses follow `first.last@intel.com` forma
 | Magic link request | Submitter | "Your Intel Content Review access link" |
 | 7 days to gate deadline | Content lead | "Deadline reminder: [gate] review due in 7 days" |
 
-Email sender: a transactional email provider (Resend or SendGrid — decision TBD, either works with Intel's approved stack).
+Email sender: **Resend** — API key already provisioned in Render env vars.
 
 ---
 
@@ -378,6 +390,8 @@ Email sender: a transactional email provider (Resend or SendGrid — decision TB
 | `EMAIL_API_KEY` | Transactional email (Resend or SendGrid) |
 | `EMAIL_FROM` | Sender address (e.g. `noreply@intel-events.com`) |
 | `APP_URL` | Base URL for magic link generation |
+| `RESEND_API_KEY` | Resend transactional email — already set in Render |
+| `VOYAGER_API_KEY` | Voyager AI embeddings — already set in Render |
 
 ### New API Endpoints
 ```
@@ -462,9 +476,7 @@ GET  /api/analytics/trends                     → Cross-event trend intelligenc
 | Auth | Magic link v2, Entra ID v3 ✅ |
 
 ## Remaining Open Questions
-1. **Transactional email provider:** Resend vs. SendGrid — which is on Intel's approved vendor list?
-2. **Voyager AI API access:** Confirm API key availability and whether it needs a separate env var or is bundled
-3. **Gate deadline dates:** Should the workback schedule dates (50%, 75%, 90% gates) be set per-event at creation time, or derived from the event date automatically?
+*All open questions resolved. Ready to build.*
 
 ---
 
