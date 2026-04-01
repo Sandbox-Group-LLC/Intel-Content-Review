@@ -321,6 +321,10 @@ function showNewEventForm(editEvent) {
           '<div class="form-group"><label>Total Session Slots</label><input id="ef-slots" type="number" value="' + ((editEvent.slot_count || editEvent.total_slots) || 12) + '"></div>' +
         '</div>' +
         '<div class="form-group"><label>Venue</label><input id="ef-venue" value="' + (editEvent.venue || '') + '"></div>' +
+        '<div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+          '<div class="form-group" style="margin:0"><label style="font-size:12px">Event Slug (for portal URL)</label><input id="ef-slug" value="' + (editEvent.slug||'') + '" placeholder="intel-federal-summit-2026"></div>' +
+          '<div class="form-group" style="margin:0"><label style="font-size:12px">Reviewer Notification Email</label><input id="ef-notify-email" value="' + (editEvent.notification_email||'') + '" placeholder="reviewer@intel.com"></div>' +
+        '</div>' +
         '<div style="margin-top:16px;padding:12px;background:#f5f5f5;border:1px solid #EAEAEA">' +
           '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#2E2F2F;margin-bottom:10px">GATE DEADLINES</div>' +
           '<div class="grid-2" style="gap:8px">' +
@@ -485,7 +489,8 @@ async function saveEventDirect() {
 
 async function saveEventEdit(id) {
   var g50 = document.getElementById('ef-gate50'); var g75 = document.getElementById('ef-gate75'); var g90 = document.getElementById('ef-gate90');
-  var body = { name: document.getElementById('ef-name').value.trim(), event_date: document.getElementById('ef-date').value, venue: document.getElementById('ef-venue').value, total_slots: parseInt(document.getElementById('ef-slots').value)||12, gate_50_deadline: g50 ? g50.value : null, gate_75_deadline: g75 ? g75.value : null, gate_90_deadline: g90 ? g90.value : null };
+  var slug = document.getElementById('ef-slug'); var notifyEmail = document.getElementById('ef-notify-email');
+  var body = { name: document.getElementById('ef-name').value.trim(), event_date: document.getElementById('ef-date').value, venue: document.getElementById('ef-venue').value, total_slots: parseInt(document.getElementById('ef-slots').value)||12, gate_50_deadline: g50 ? g50.value : null, gate_75_deadline: g75 ? g75.value : null, gate_90_deadline: g90 ? g90.value : null, slug: slug ? slug.value : null, notification_email: notifyEmail ? notifyEmail.value : null };
   var r = await api('PUT', '/api/events/' + id, body);
   if (r.error) { alert(r.error); return; }
   closePanel(); renderEventsList(); loadEvents();
@@ -715,8 +720,13 @@ async function viewSubmission(id) {
     '</div>' +
     '<div id="gate-checklist-container" style="margin-top:16px"></div>' +
     '<div id="conflict-container" style="margin-top:8px"></div>' +
-    '<div id="action-buttons" style="margin-top:12px;display:flex;gap:8px">' +
+    '<div id="coaching-container" style="margin-top:8px"></div>' +
+    '<div id="version-container" style="margin-top:8px"></div>' +
+    '<div id="action-buttons" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
       '<button class="btn-primary" id="btn-run-score">Run AI Score</button>' +
+      '<button class="btn-secondary" id="btn-run-coach">Get Coaching</button>' +
+      '<button class="btn-secondary" id="btn-send-magic">Send Portal Link</button>' +
+      '<button class="btn-secondary" id="btn-view-versions">Version History</button>' +
     '</div>' +
     scoreHtml;
   
@@ -749,6 +759,73 @@ async function viewSubmission(id) {
 
 async function saveNotes(id, notes) {
   await api('PUT', '/api/submissions/' + id, { reviewer_notes: notes });
+}
+
+async function runCoaching(id) {
+  var el = document.getElementById('coaching-container');
+  if (el) el.innerHTML = '<div style="padding:12px;background:#EEF6FB;border:1px solid #00AAE8;font-size:13px;color:#000864">Generating coaching report...</div>';
+  var r = await api('POST', '/api/submissions/' + id + '/coach');
+  if (r.ok) {
+    loadCoachingPanel(id, r.report);
+    renderSubmissions();
+  } else {
+    if (el) el.innerHTML = '<div style="color:#CC0000;font-size:13px">' + (r.error||'Coaching failed') + '</div>';
+  }
+}
+
+function loadCoachingPanel(id, report) {
+  var el = document.getElementById('coaching-container');
+  if (!el || !report) return;
+  if (typeof report === 'string') { try { report = JSON.parse(report); } catch(e) { return; } }
+  var html = '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-top:4px">' +
+    '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">COACHING REPORT</div>';
+  if (report.overall_coaching_note) html += '<div style="padding:10px;background:#EEF6FB;border:1px solid #00AAE8;font-size:13px;margin-bottom:10px">' + report.overall_coaching_note + '</div>';
+  if (report.critical_fixes && report.critical_fixes.length) {
+    html += '<div style="font-weight:700;font-size:12px;color:#CC0000;margin-bottom:6px">CRITICAL FIXES</div>';
+    report.critical_fixes.forEach(function(f) { html += '<div style="padding:8px;background:#FFF0F0;border-left:3px solid #CC0000;margin-bottom:4px;font-size:12px"><strong>' + escHtml(f.issue||'') + '</strong><br>' + escHtml(f.action||'') + '</div>'; });
+  }
+  if (report.high_impact && report.high_impact.length) {
+    html += '<div style="font-weight:700;font-size:12px;color:#B8860B;margin-top:8px;margin-bottom:6px">HIGH IMPACT</div>';
+    report.high_impact.forEach(function(f) { html += '<div style="padding:8px;background:#FFF8EC;border-left:3px solid #B8860B;margin-bottom:4px;font-size:12px"><strong>' + escHtml(f.opportunity||'') + '</strong><br>' + escHtml(f.action||'') + (f.expected_gain ? '<br><em>' + escHtml(f.expected_gain) + '</em>' : '') + '</div>'; });
+  }
+  if (report.quick_wins && report.quick_wins.length) {
+    html += '<div style="font-weight:700;font-size:12px;color:#007A3D;margin-top:8px;margin-bottom:6px">QUICK WINS</div>';
+    report.quick_wins.forEach(function(f) { html += '<div style="padding:8px;background:#F0FAF5;border-left:3px solid #007A3D;margin-bottom:4px;font-size:12px"><strong>' + escHtml(f.change||'') + '</strong><br>' + escHtml(f.reason||'') + '</div>'; });
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function sendMagicLink(id, s) {
+  var email = prompt('Enter submitter email address (first.last@intel.com):');
+  if (!email || !email.trim()) return;
+  var r = await api('POST', '/api/submissions/' + id + '/magic-link', { email: email.trim() });
+  if (r.ok) { alert('Magic link sent to ' + email.trim()); }
+  else { alert('Error: ' + (r.error || 'Failed to send')); }
+}
+
+async function loadVersionHistory(id) {
+  var el = document.getElementById('version-container');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:12px;color:#666">Loading versions...</div>';
+  var data = await api('GET', '/api/submissions/' + id + '/versions');
+  if (!data.ok || !data.versions || data.versions.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:#666;padding:8px 0">No version history yet.</div>';
+    return;
+  }
+  var html = '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-top:4px">' +
+    '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">VERSION HISTORY</div>';
+  data.versions.forEach(function(v) {
+    var score = v.ai_score ? (v.ai_score.overall || v.ai_score.overall_score || null) : null;
+    var scoreBg = score === null ? '#6B6B6B' : score >= 80 ? '#007A3D' : score >= 60 ? '#B8860B' : '#CC0000';
+    html += '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #EAEAEA;font-size:12px">' +
+      '<span style="font-weight:700;min-width:24px">v' + v.version_number + '</span>' +
+      '<span style="color:#666;flex:1">' + (v.edited_by || 'reviewer') + ' &mdash; ' + new Date(v.created_at).toLocaleDateString() + '</span>' +
+      (score !== null ? '<span style="background:' + scoreBg + ';color:#fff;padding:2px 8px;font-weight:700;font-size:11px">' + score + '</span>' : '<span style="background:#6B6B6B;color:#fff;padding:2px 8px;font-size:11px">—</span>') +
+    '</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 async function loadGateChecklist(id) {
