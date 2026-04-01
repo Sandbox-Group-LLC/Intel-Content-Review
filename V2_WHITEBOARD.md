@@ -610,7 +610,8 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 
 ## Build Order & Checklist
 
-> **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
+> **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI)
+> **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
 
 ### Phase 1 — Quality Gates & Compliance
 - [x] Define gate field requirements and scoring weights
@@ -624,19 +625,19 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [ ] Update README with gate requirements and enforcement levels ← next
 
 ### Phase 2 — Voyager AI Memory Brain
-- [ ] Enable pgvector on Neon (`CREATE EXTENSION IF NOT EXISTS vector`)
-- [ ] Add `event_memories`, `survey_responses`, `speaker_history` tables
-- [ ] Integrate Voyager AI for embedding generation
-- [ ] Survey CSV import endpoint — auto column mapping + fuzzy session matching
-- [ ] Mapping review screen before import commit
-- [ ] Outcome data import (attendance, walkout, Q&A engagement)
-- [ ] Auto-lesson extraction (Claude call post-ingestion)
-- [ ] KPI outcome tracking against Intel standard targets
-- [ ] Memory-augmented scoring (similarity search → inject into scoring prompt)
-- [ ] "Past Event Insight" section in scorecard UI
-- [ ] Memory dashboard tab (browse, filter, upvote/downvote, manual add)
-- [ ] Speaker history auto-update on survey import
-- [ ] Add `submission_versions` table + versioning on every save
+- [x] Enable pgvector on Neon (`CREATE EXTENSION IF NOT EXISTS vector`)
+- [x] Add `event_memories`, `survey_responses`, `speaker_history`, `submission_versions` tables
+- [x] Integrate Voyager AI — voyage-3 model, generateEmbedding() + searchMemories() via pgvector
+- [x] Survey CSV import endpoint — auto column mapping + fuzzy session matching + speaker_history auto-update
+- [x] Import result feedback with row counts
+- [ ] Outcome data import (attendance, walkout, Q&A engagement) ← Phase 3
+- [x] Auto-lesson extraction — Claude extracts 5-10 lessons, embeds with Voyager, stores in event_memories
+- [x] KPI outcome tracking — survey stats dashboard with Intel standard targets and progress bars
+- [x] Memory-augmented scoring — cosine similarity search retrieves top-5 memories, injected into Claude system prompt
+- [x] "Past Event Insight" section in scorecard UI — shows influencing memories with category badges
+- [x] Memory dashboard tab — browse with signal strength bars, upvote/downvote/delete, manual add form, three sub-tabs
+- [x] Speaker history auto-update on survey import
+- [x] submission_versions table + version snapshot on every submission PUT
 
 ### Phase 3 — Coaching & Submitter Portal
 - [ ] Coaching report generation endpoint + UI (critical / high-impact / quick wins / examples)
