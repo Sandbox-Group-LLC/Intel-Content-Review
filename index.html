@@ -314,7 +314,15 @@ function showNewEventForm(editEvent) {
           '<div class="form-group"><label>Total Session Slots</label><input id="ef-slots" type="number" value="' + ((editEvent.slot_count || editEvent.total_slots) || 12) + '"></div>' +
         '</div>' +
         '<div class="form-group"><label>Venue</label><input id="ef-venue" value="' + (editEvent.venue || '') + '"></div>' +
-        '<button class="btn-primary" id="btn-save-details">Save Details</button>' +
+        '<div style="margin-top:16px;padding:12px;background:#f5f5f5;border:1px solid #EAEAEA">' +
+          '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#2E2F2F;margin-bottom:10px">GATE DEADLINES</div>' +
+          '<div class="grid-2" style="gap:8px">' +
+            '<div class="form-group" style="margin:0"><label style="font-size:12px">50% Review Deadline</label><input id="ef-gate50" type="date" value="' + (editEvent.gate_50_deadline || '') + '"></div>' +
+            '<div class="form-group" style="margin:0"><label style="font-size:12px">75% Review Deadline</label><input id="ef-gate75" type="date" value="' + (editEvent.gate_75_deadline || '') + '"></div>' +
+          '</div>' +
+          '<div class="form-group" style="margin-top:8px;margin-bottom:0"><label style="font-size:12px">90% Review Deadline</label><input id="ef-gate90" type="date" value="' + (editEvent.gate_90_deadline || '') + '"></div>' +
+        '</div>' +
+        '<button class="btn-primary" id="btn-save-details" style="margin-top:12px">Save Details</button>' +
       '</div>' +
       '<div id="panel-pane-profile" style="display:none;">' +
         getProfileFieldsHtml() +
@@ -342,6 +350,14 @@ function showNewEventForm(editEvent) {
           '<div class="form-group"><label>Total Session Slots</label><input id="ef-slots" type="number" value="12"></div>' +
         '</div>' +
         '<div class="form-group"><label>Venue</label><input id="ef-venue" value=""></div>' +
+        '<div style="margin-top:16px;padding:12px;background:#f5f5f5;border:1px solid #EAEAEA">' +
+          '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#2E2F2F;margin-bottom:10px">GATE DEADLINES (OPTIONAL)</div>' +
+          '<div class="grid-2" style="gap:8px">' +
+            '<div class="form-group" style="margin:0"><label style="font-size:12px">50% Review</label><input id="ef-gate50" type="date"></div>' +
+            '<div class="form-group" style="margin:0"><label style="font-size:12px">75% Review</label><input id="ef-gate75" type="date"></div>' +
+          '</div>' +
+          '<div class="form-group" style="margin-top:8px;margin-bottom:0"><label style="font-size:12px">90% Review</label><input id="ef-gate90" type="date"></div>' +
+        '</div>' +
         '<button class="btn-primary" id="btn-next-step">Next &rarr;</button>' +
       '</div>' +
       '<div id="event-form-step2" style="display:none">' +
@@ -443,12 +459,16 @@ async function saveEventWithProfile() {
 }
 
 async function saveEventDirect() {
+  var g50 = document.getElementById('ef-gate50'); var g75 = document.getElementById('ef-gate75'); var g90 = document.getElementById('ef-gate90');
   var body = {
     name: document.getElementById('ef-name').value.trim(),
     event_date: document.getElementById('ef-date').value,
     venue: document.getElementById('ef-venue').value,
     total_slots: parseInt(document.getElementById('ef-slots').value) || 12,
-    context_profile: buildProfileJsonFromFields()
+    context_profile: buildProfileJsonFromFields(),
+    gate_50_deadline: g50 ? g50.value : null,
+    gate_75_deadline: g75 ? g75.value : null,
+    gate_90_deadline: g90 ? g90.value : null
   };
   if (!body.name) { alert('Event name required'); return; }
   var r = await api('POST', '/api/events', body);
@@ -457,7 +477,8 @@ async function saveEventDirect() {
 }
 
 async function saveEventEdit(id) {
-  var body = { name: document.getElementById('ef-name').value.trim(), event_date: document.getElementById('ef-date').value, venue: document.getElementById('ef-venue').value, total_slots: parseInt(document.getElementById('ef-slots').value)||12 };
+  var g50 = document.getElementById('ef-gate50'); var g75 = document.getElementById('ef-gate75'); var g90 = document.getElementById('ef-gate90');
+  var body = { name: document.getElementById('ef-name').value.trim(), event_date: document.getElementById('ef-date').value, venue: document.getElementById('ef-venue').value, total_slots: parseInt(document.getElementById('ef-slots').value)||12, gate_50_deadline: g50 ? g50.value : null, gate_75_deadline: g75 ? g75.value : null, gate_90_deadline: g90 ? g90.value : null };
   var r = await api('PUT', '/api/events/' + id, body);
   if (r.error) { alert(r.error); return; }
   closePanel(); renderEventsList(); loadEvents();
@@ -524,7 +545,7 @@ function renderSubTable() {
     var score = s.ai_score ? (s.ai_score.overall_score != null ? s.ai_score.overall_score : s.ai_score.overall) : null;
     var scoreBadge = score !== null ? '<span class="badge ' + (score>=80?'score-high':score>=60?'score-mid':'score-low') + '">Score: ' + score + '</span>' : '<span class="badge score-none">Not Scored</span>';
     var statusBadge = '<span class="badge badge-' + (s.status||'submitted') + '">' + toTitleCase(s.status||'submitted') + '</span>';
-    html += '<tr><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.title||'') + '">' + (s.title||'').slice(0,55) + (s.title&&s.title.length>55?'...':'') + '</td><td>' + (s.bu||'&mdash;') + '</td><td>' + (s.track||'&mdash;') + '</td><td>' + (s.format||'&mdash;') + '</td><td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.speaker_names||'') + '">' + (s.speaker_names||'&mdash;') + '</td><td style="text-align:center">' + (s.demos&&s.demos!=='None'&&s.demos!=='TBD'?'&#10003;':'&mdash;') + '</td><td>' + statusBadge + '</td><td>' + scoreBadge + '</td><td class="actions"><a onclick="viewSubmission(' + s.id + ')">View</a><a onclick="scoreSubmission(' + s.id + ')">Score</a><a onclick="editStatus(' + s.id + ')">Status</a><a onclick="editSubmission(' + s.id + ')">Edit</a></td></tr>';
+    html += '<tr><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.title||'') + '">' + (s.title||'').slice(0,55) + (s.title&&s.title.length>55?'...':'') + (s.disclosure_flag?'<span title="Disclosure Review Required" style="color:#CC0000;font-weight:700;margin-left:4px">⚠</span>':'') + (s.nda_required?'<span title="NDA Required" style="color:#B8860B;margin-left:4px">🔒</span>':'') + '</td><td>' + (s.bu||'&mdash;') + '</td><td>' + (s.track||'&mdash;') + '</td><td>' + (s.format||'&mdash;') + '</td><td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.speaker_names||'') + '">' + (s.speaker_names||'&mdash;') + '</td><td style="text-align:center">' + (s.demos&&s.demos!=='None'&&s.demos!=='TBD'?'&#10003;':'&mdash;') + '</td><td>' + statusBadge + '</td><td>' + scoreBadge + '</td><td class="actions"><a onclick="viewSubmission(' + s.id + ')">View</a><a onclick="scoreSubmission(' + s.id + ')">Score</a><a onclick="editStatus(' + s.id + ')">Status</a><a onclick="editSubmission(' + s.id + ')">Edit</a></td></tr>';
   });
   html += '</tbody></table>';
   if (!filtered.length) html = '<div class="loading">No submissions match filters.</div>';
@@ -662,6 +683,8 @@ async function viewSubmission(id) {
       '<div><b>Duration:</b> ' + (s.duration||'&mdash;') + '</div>' +
     '</div>' +
     '<div style="margin-top:12px"><b>Speakers:</b> ' + (s.speaker_names||'&mdash;') + '</div>' +
+    (s.disclosure_flag ? '<div style="margin:8px 0;padding:8px 12px;background:#CC0000;color:#fff;font-size:12px;font-weight:700;letter-spacing:.04em">⚠ DISCLOSURE REVIEW REQUIRED — Abstract contains potentially sensitive launch or roadmap language.</div>' : '') +
+    (s.nda_required ? '<div style="margin:4px 0 8px;padding:8px 12px;background:#B8860B;color:#fff;font-size:12px;font-weight:700">🔒 NDA REQUIRED — Approver: ' + (s.nda_approver || 'Not specified') + '</div>' : '') +
     '<div style="margin-top:8px"><b>Abstract:</b><p style="font-size:13px;margin-top:4px;color:#444">' + (s.abstract||'&mdash;') + '</p></div>' +
     '<div id="enrich-container" style="margin-top:16px;"></div>' +
     '<div style="margin-top:8px"><b>Key Topics:</b> ' + (s.key_topics||'&mdash;') + '</div>' +
@@ -671,6 +694,8 @@ async function viewSubmission(id) {
       '<textarea id="notes-field" rows="3" style="margin-top:4px">' + (s.reviewer_notes||'') + '</textarea>' +
       '<button class="btn-secondary" style="margin-top:8px" id="btn-save-notes">Save Notes</button>' +
     '</div>' +
+    '<div id="gate-checklist-container" style="margin-top:16px"></div>' +
+    '<div id="conflict-container" style="margin-top:8px"></div>' +
     '<div id="action-buttons" style="margin-top:12px;display:flex;gap:8px">' +
       '<button class="btn-primary" id="btn-run-score">Run AI Score</button>' +
     '</div>' +
@@ -705,6 +730,64 @@ async function viewSubmission(id) {
 
 async function saveNotes(id, notes) {
   await api('PUT', '/api/submissions/' + id, { reviewer_notes: notes });
+}
+
+async function loadGateChecklist(id) {
+  var el = document.getElementById('gate-checklist-container');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:12px;color:#666">Evaluating gates...</div>';
+  try {
+    var data = await api('GET', '/api/submissions/' + id + '/gates');
+    if (!data.ok) { el.innerHTML = ''; return; }
+    var gates = data.gates;
+    var gateOrder = [['gate_50', '50% Gate'], ['gate_75', '75% Gate'], ['gate_90', '90% Gate']];
+    var html = '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-top:4px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">SUBMISSION GATES</div>';
+    gateOrder.forEach(function(g) {
+      var key = g[0]; var label = g[1];
+      var r = gates[key];
+      var levelColor = r.level === 'block' ? '#CC0000' : r.level === 'warn' ? '#B8860B' : '#007A3D';
+      var levelLabel = r.level === 'block' ? 'BLOCKED' : r.level === 'warn' ? 'WARNING' : 'PASS';
+      html += '<div style="margin-bottom:10px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+          '<span style="font-weight:700;font-size:13px">' + label + '</span>' +
+          '<span style="background:' + levelColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;letter-spacing:.06em">' + levelLabel + ' (' + r.score + '/100)</span>' +
+        '</div>';
+      if (r.blocking_fields && r.blocking_fields.length > 0) {
+        html += '<div style="font-size:12px;color:#666;margin-top:4px">';
+        r.blocking_fields.forEach(function(f) {
+          html += '<div style="display:flex;align-items:center;gap:6px;padding:2px 0">'+
+            '<span style="color:' + levelColor + ';font-size:14px">✗</span>' +
+            '<span>' + f.label + '</span></div>';
+        });
+        html += '</div>';
+      } else {
+        html += '<div style="font-size:12px;color:#007A3D">✓ All required fields complete</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = ''; }
+}
+
+async function loadConflicts(id) {
+  var el = document.getElementById('conflict-container');
+  if (!el) return;
+  try {
+    var data = await api('GET', '/api/submissions/' + id + '/conflicts');
+    if (!data.ok || !data.conflicts || data.conflicts.length === 0) { el.innerHTML = ''; return; }
+    var html = '<div style="padding:12px;background:#fff;border:1px solid #B8860B;margin-top:4px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#B8860B;margin-bottom:8px">⚠ CONFLICTS DETECTED</div>';
+    data.conflicts.forEach(function(c) {
+      html += '<div style="font-size:12px;margin-bottom:6px;padding:6px 8px;background:#fffbf0;border-left:3px solid #B8860B">' +
+        '<span style="font-weight:700">' + c.conflict_type.replace(/_/g,' ').toUpperCase() + ':</span> ' + c.description +
+        ' — <a href="#" style="color:#00AAE8" onclick="openSubmissionDetail(' + c.conflicting_id + ');return false">' + c.conflicting_title + '</a>' +
+      '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = ''; }
 }
 
 function editSubmission(id) {
