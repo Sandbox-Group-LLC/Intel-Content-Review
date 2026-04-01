@@ -26,7 +26,7 @@ async function callClaude(systemPrompt, userPrompt, isJson) {
   }
   try {
     var response = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
@@ -51,54 +51,9 @@ async function callClaude(systemPrompt, userPrompt, isJson) {
   }
 }
 
+// Routing formerly-Gemini calls through Claude for a unified AI stack
 async function callGemini(systemPrompt, userPrompt, isJson) {
-  var GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY environment variable not set.');
-  }
-
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=' + GEMINI_API_KEY;
-  
-  var requestBody = {
-    system_instruction: {
-      parts: [{ text: systemPrompt }]
-    },
-    contents: [{ 
-      parts: [{ text: userPrompt }]
-    }],
-    generationConfig: {}
-  };
-
-  if (isJson) {
-    requestBody.generationConfig.responseMimeType = 'application/json';
-  }
-
-  try {
-    var response = await axios.post(url, requestBody, {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 60000
-    });
-
-    if (!response.data.candidates || !response.data.candidates.length) {
-        throw new Error('No content returned from Gemini API');
-    }
-    
-    var contentText = response.data.candidates[0].content.parts[0].text;
-    
-    if (isJson) {
-      return JSON.parse(contentText);
-    } else {
-      return contentText;
-    }
-  } catch (error) {
-    console.error('Error calling Gemini API:', error.response ? error.response.data : error.message);
-    if (error.response && error.response.data && error.response.data.error) {
-        console.error('Gemini API Error Details:', error.response.data.error.message);
-    }
-    throw new Error('Failed to get response from AI model.');
-  }
+  return await callClaude(systemPrompt, userPrompt, isJson);
 }
 
 async function ensureSchema() {
