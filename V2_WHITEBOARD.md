@@ -18,6 +18,7 @@
 | 8 | Voyager AI access | **VOYAGER_API_KEY** already set in Render env vars |
 | 9 | Gate deadline dates | **Admin-defined per event** — dates change constantly, no auto-derivation |
 | 10 | Ownership | **Claude owns this repo going forward** — direct commits via GitHub API, Render auto-deploy on every push to main |
+| 11 | Competitive intelligence | **Phase 4.5** — 3-stage agent stack (Sonar + Sonnet + Haiku), ships after Phase 4, PERPLEXITY_API_KEY confirmed in Render |
 
 ---
 
@@ -392,6 +393,7 @@ Email sender: **Resend** — API key already provisioned in Render env vars.
 | `APP_URL` | Base URL for magic link generation |
 | `RESEND_API_KEY` | Resend transactional email — already set in Render |
 | `VOYAGER_API_KEY` | Voyager AI embeddings — already set in Render |
+| `PERPLEXITY_API_KEY` | Perplexity Sonar for competitive intelligence — already set in Render |
 
 ### New API Endpoints
 ```
@@ -413,6 +415,196 @@ GET  /submit/:eventSlug                        → Submitter portal (separate ro
 GET  /api/events/:id/program-health            → Program health dashboard data
 GET  /api/analytics/trends                     → Cross-event trend intelligence
 ```
+
+---
+
+
+### PHASE 4.5 — Competitive Intelligence & Whitespace Analysis
+*Goal: Tell Intel not just whether a session is good, but whether it's differentiated — and where the unclaimed territory is.*
+
+This phase ports the 3-stage competitive intelligence agent stack from a proven article content platform, adapted for Intel's event submission context. The brand profile is replaced by the event's `ai_system_prompt`. Everything else maps almost directly.
+
+#### Why This Belongs Here
+Standard AI scoring answers: "Is this session aligned with our goals?"
+This answers: "Does Intel actually own this topic space, or are we the fifth organization submitting on this exact thing?"
+
+For a government-focused event like Federal Summit, the difference is critical. If three defense primes and two cloud hyperscalers are all presenting on agentic AI for defense, Intel's session needs a genuinely differentiated angle or it disappears. This pipeline finds that angle — or confirms Intel already has it.
+
+#### The Three-Model Stack
+
+| Stage | Model | Purpose |
+|---|---|---|
+| 1 — Market Intelligence | Perplexity Sonar | Live competitive landscape scan per content pillar |
+| 2 — Gap Classification | claude-sonnet-4-6 | Owned/Contested/Unclaimed classification + entry angles |
+| 3 — Per-Submission Scoring | claude-haiku-4-5-20251001 | High-volume title saturation checks + reframe suggestions |
+
+**Environment variables already set:** `PERPLEXITY_API_KEY` (Render) · `ANTHROPIC_API_KEY` (existing)
+
+#### Stage 1 — Perplexity Sonar Research
+
+Endpoint: `https://api.perplexity.ai/chat/completions`
+Model: `sonar`
+
+Run once per event per content pillar (e.g. one call for "Agentic AI federal government conference space", one for "Edge computing defense conference space", etc.). Returns cited sources — the citations are the signal, not just the summaries.
+
+Research prompt template (parameterized with event pillar + audience from ai_system_prompt):
+```
+Research the [PILLAR] conference and event space for [AUDIENCE_CONTEXT].
+Return only JSON:
+{
+  "dominantSpeakers": ["name — topic they own"],
+  "dominantOrganizations": ["org — what they publish/present about"],
+  "saturatedTopics": ["topics appearing at every conference in this space"],
+  "emergingTopics": ["topics first appearing in last 12 months"],
+  "missingTopics": ["audience needs with no speaker representation"],
+  "aiCitations": ["who gets cited when AI answers questions about this space"],
+  "recentConferenceAgendas": ["conference name — standout session titles"]
+}
+```
+
+#### Stage 2 — Gap Classification (claude-sonnet-4-6)
+
+Takes: Sonar output for each pillar + event `ai_system_prompt` + all submission abstracts for that pillar.
+
+**Ownership Classification Rules (verbatim from source platform):**
+
+- **OWNED** (confidence 80–100): One or two speakers/orgs consistently appear as the authoritative voice. New entrants need: (a) proprietary data angle, (b) named framework, or (c) attack a sub-niche the owner ignores.
+- **CONTESTED** (confidence 50–79): Multiple voices, no clear authority. 6–12 month window to claim with consistent output and a repeatable framework.
+- **UNCLAIMED** (confidence 0–49): Real audience demand, no authoritative voice. First mover with strong POV wins. Urgency is high — these windows close fast.
+
+**Four ownership dimensions evaluated per topic:**
+1. **Format ownership** — owned as panel but unclaimed as workshop/case study/keynote?
+2. **Recency gap** — heavily covered 2–3 years ago but not refreshed? Flag as "recency unclaimed."
+3. **Speaker authority map** — who owns this on the conference circuit? Where are credible voices absent?
+4. **AI citation signal** — who gets cited by Perplexity/ChatGPT on this topic? Cited = owns it. Not cited = unclaimed regardless of article count.
+
+**Output schema:**
+```json
+{
+  "marketSnapshot": {
+    "totalTopicsAnalyzed": 0,
+    "owned": 0,
+    "contested": 0,
+    "unclaimed": 0,
+    "highUrgencyOpportunities": 0
+  },
+  "topics": [
+    {
+      "topic": "string",
+      "ownershipStatus": "owned|contested|unclaimed",
+      "confidence": 0,
+      "ownedBy": [],
+      "formatGaps": [],
+      "recencyGap": false,
+      "recencyNote": "string",
+      "aiCitationOwner": "string|null",
+      "whyUnclaimed": "string",
+      "entryAngle": "string — exact framing Intel should use",
+      "suggestedSessionTitle": "string — reframed title that claims unclaimed territory",
+      "urgency": "high|medium|low",
+      "urgencyReason": "string"
+    }
+  ],
+  "whitespaceOpportunities": [
+    {
+      "cluster": "string",
+      "sessionCount": 0,
+      "estimatedClaimWindow": "string",
+      "ownItStrategy": "string — how Intel owns the cluster, not just one session"
+    }
+  ],
+  "competitorProfiles": [
+    {
+      "name": "string",
+      "topicsOwned": [],
+      "weaknesses": [],
+      "attackAngle": "string"
+    }
+  ]
+}
+```
+
+#### Stage 3 — Per-Submission Reframe (claude-haiku-4-5-20251001)
+
+Runs on each submission individually after Stage 2 completes. Fast, cheap, high volume.
+
+Tasks per submission:
+- **Title saturation check**: Is this session title (or a near-identical one) appearing at other conferences? Score 0–100.
+- **Reframe suggestion**: If title is saturated (score > 60), generate 2–3 alternative titles that claim unclaimed territory using the entry angle from Stage 2.
+- **Named framework prompt**: Does the abstract contain or imply a named framework/methodology? If not, suggest one. Named frameworks are the fastest path to topic ownership.
+- **AI citation gap**: Based on Stage 1 data, is the proposed speaker already cited by AI engines on this topic? If not, flag and suggest citation-building angle.
+
+Results stored in `submissions.competitive_analysis` JSONB field.
+
+#### Intel-Specific Adaptations
+
+The key substitution from the source platform: **event `ai_system_prompt` replaces brand profile**. This works better for Intel because the system prompt already contains:
+- Audience definitions (who attends and why they care)
+- Content pillars (the topic spaces to analyze)
+- Key messages (what Intel wants to be known for)
+- Priority products (what needs representation)
+
+Additional Intel-specific signals to inject into Stage 2:
+- Intel's known competitor organizations in each pillar (AWS, NVIDIA, AMD, Qualcomm, defense primes)
+- Intel's existing content assets in each pillar (from the session catalog)
+- Intel's stated brand positioning from the event profile
+
+#### Whitespace Report
+
+New event-level output — accessible from the Review section. Shows:
+- Unclaimed topic clusters across all content pillars where Intel has **no submission at all**
+- Pillar coverage map: which pillars are over-submitted vs. under-represented
+- "Plant a flag" recommendations: specific session topics Intel should solicit from BUs before submissions close
+- Competitor heat map: which organizations dominate which pillars on the government conference circuit
+
+This becomes a proactive program management tool — Intel's content team can use it to go back to BUs with specific asks rather than waiting to see what comes in.
+
+#### New DB Fields
+
+```sql
+-- On submissions table
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS competitive_analysis JSONB;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS title_saturation_score INTEGER;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS reframe_suggestions JSONB;
+
+-- New table for event-level competitive intelligence
+CREATE TABLE IF NOT EXISTS competitive_intelligence (
+  id SERIAL PRIMARY KEY,
+  event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+  pillar TEXT,
+  sonar_raw JSONB,
+  gap_analysis JSONB,
+  whitespace_report JSONB,
+  run_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### New API Endpoints
+
+```
+POST /api/events/:id/competitive/run          → Run full 3-stage pipeline for event
+GET  /api/events/:id/competitive              → Get latest competitive intelligence results
+GET  /api/events/:id/competitive/whitespace   → Get whitespace report
+POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single submission
+```
+
+#### Phase 4.5 Build Checklist
+
+- [ ] Add `competitive_intelligence` table to schema
+- [ ] Add `competitive_analysis`, `title_saturation_score`, `reframe_suggestions` to submissions
+- [ ] Build Perplexity Sonar client (Stage 1) — one call per content pillar
+- [ ] Build Stage 2 gap classification prompt — inject event ai_system_prompt + Sonar output + submission abstracts
+- [ ] Build Stage 3 per-submission reframe (Haiku) — title saturation + reframe + named framework prompt
+- [ ] POST /api/events/:id/competitive/run — orchestrates all three stages
+- [ ] GET /api/events/:id/competitive — returns latest results
+- [ ] POST /api/submissions/:id/competitive/reframe — single submission reframe
+- [ ] Competitive Intelligence tab in Review section UI
+- [ ] Whitespace Report view — unclaimed clusters, pillar coverage map, plant-a-flag recommendations
+- [ ] Competitor heat map UI component
+- [ ] Per-submission competitive badge in submissions table (OWNED/CONTESTED/UNCLAIMED)
+- [ ] Reframe suggestions surface in submission detail panel
+- [ ] Update README with Phase 4.5 endpoints and env vars
+
 
 ---
 
@@ -455,6 +647,18 @@ GET  /api/analytics/trends                     → Cross-event trend intelligenc
 - [ ] Submitter view: gate status, score, coaching report, edit + rescore
 - [ ] Email notifications: Resend/SendGrid integration
 - [ ] All notification triggers wired (score, status, gate block, update, magic link, deadline)
+
+### Phase 4.5 — Competitive Intelligence
+- [ ] Add `competitive_intelligence` table + submission competitive fields to schema
+- [ ] Perplexity Sonar client — Stage 1 per content pillar
+- [ ] Stage 2 gap classification — claude-sonnet-4-6 with event system prompt
+- [ ] Stage 3 per-submission reframe — claude-haiku-4-5-20251001
+- [ ] POST /api/events/:id/competitive/run orchestrator
+- [ ] Competitive Intelligence tab in Review section
+- [ ] Whitespace Report view + pillar coverage map
+- [ ] Per-submission OWNED/CONTESTED/UNCLAIMED badge in table
+- [ ] Reframe suggestions in submission detail panel
+- [ ] Update README
 
 ### Phase 4 — Program Intelligence
 - [ ] Program health dashboard (coverage map, track balance, readiness timeline)
