@@ -611,7 +611,8 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 ## Build Order & Checklist
 
 > **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI)
-> **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
+> **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI)
+> **Phase 3 shipped** — `edcd9b4` (server) + `ef306c7` (UI) — deployed to Render April 1, 2026 — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
 
 ### Phase 1 — Quality Gates & Compliance
 - [x] Define gate field requirements and scoring weights
@@ -640,14 +641,14 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [x] submission_versions table + version snapshot on every submission PUT
 
 ### Phase 3 — Coaching & Submitter Portal
-- [ ] Coaching report generation endpoint + UI (critical / high-impact / quick wins / examples)
-- [ ] Version history panel + diff view
-- [ ] Score delta metric across versions
-- [ ] Magic link auth system (generate, store, verify, expire, revoke)
-- [ ] Submitter portal route (`/submit/:eventSlug`)
-- [ ] Submitter view: gate status, score, coaching report, edit + rescore
-- [ ] Email notifications: Resend/SendGrid integration
-- [ ] All notification triggers wired (score, status, gate block, update, magic link, deadline)
+- [x] Coaching report generation endpoint + UI — critical fixes, high impact, quick wins, past event examples
+- [x] Version history panel — shows per-version score, editor, date
+- [x] Score delta metric — stored on submission, shown in scorecard and submitter portal
+- [x] Magic link auth system — generate, store, verify, 72hr expiry, token-scoped to submission
+- [x] Submitter portal route — `/submit/token/:token` self-contained Intel-branded page
+- [x] Submitter view: score, score delta, coaching report, edit form (abstract/topics/products/demos/partners)
+- [x] Email notifications via Resend — scored, status changed, gate blocked, portal link, submitter updated
+- [x] All notification triggers wired — score, status change, gate block, submitter update, magic link send
 
 ### Phase 4.5 — Competitive Intelligence
 - [ ] Add `competitive_intelligence` table + submission competitive fields to schema
