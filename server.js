@@ -214,7 +214,7 @@ async function ensureSchema() {
 
   // Create submission_gates table
   try {
-    await sql\`
+    await sql`
       CREATE TABLE IF NOT EXISTS submission_gates (
         id SERIAL PRIMARY KEY,
         submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
@@ -225,13 +225,13 @@ async function ensureSchema() {
         blocking_fields JSONB DEFAULT '[]',
         UNIQUE(submission_id, gate)
       )
-    \`;
+    `;
     console.log('[OK] submission_gates table');
   } catch(e) { console.log('[SKIP] submission_gates:', e.message); }
 
   // Create submission_conflicts table
   try {
-    await sql\`
+    await sql`
       CREATE TABLE IF NOT EXISTS submission_conflicts (
         id SERIAL PRIMARY KEY,
         submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
@@ -241,7 +241,7 @@ async function ensureSchema() {
         detected_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(submission_id, conflicting_id, conflict_type)
       )
-    \`;
+    `;
     console.log('[OK] submission_conflicts table');
   } catch(e) { console.log('[SKIP] submission_conflicts:', e.message); }
 
@@ -535,7 +535,7 @@ app.get('/api/submissions/:id/gates', async function(req, res) {
   try {
     var sql = getDb();
     var id = req.params.id;
-    var subResult = await sql\`SELECT * FROM submissions WHERE id = ${id}\`;
+    var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
     if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
     var sub = subResult[0];
 
@@ -546,7 +546,7 @@ app.get('/api/submissions/:id/gates', async function(req, res) {
       var eval_result = evaluateGate(sub, g);
       results[g] = eval_result;
       // Upsert into submission_gates
-      await sql\`
+      await sql`
         INSERT INTO submission_gates (submission_id, gate, score, level, checked_at, blocking_fields)
         VALUES (${id}, ${g}, ${eval_result.score}, ${eval_result.level}, NOW(), ${JSON.stringify(eval_result.blocking_fields)})
         ON CONFLICT (submission_id, gate) DO UPDATE SET
@@ -554,13 +554,13 @@ app.get('/api/submissions/:id/gates', async function(req, res) {
           level = EXCLUDED.level,
           checked_at = EXCLUDED.checked_at,
           blocking_fields = EXCLUDED.blocking_fields
-      \`;
+      `;
     }
 
     // Check and update disclosure flag
     var flagged = scanDisclosureFlags(sub);
     if (flagged !== sub.disclosure_flag) {
-      await sql\`UPDATE submissions SET disclosure_flag = ${flagged} WHERE id = ${id}\`;
+      await sql`UPDATE submissions SET disclosure_flag = ${flagged} WHERE id = ${id}`;
     }
 
     res.json({ ok: true, gates: results, disclosure_flag: flagged });
@@ -575,13 +575,13 @@ app.get('/api/submissions/:id/conflicts', async function(req, res) {
   try {
     var sql = getDb();
     var id = req.params.id;
-    var conflicts = await sql\`
+    var conflicts = await sql`
       SELECT sc.*, s.title as conflicting_title, s.track as conflicting_track, s.bu as conflicting_bu
       FROM submission_conflicts sc
       JOIN submissions s ON s.id = sc.conflicting_id
       WHERE sc.submission_id = ${id}
       ORDER BY sc.detected_at DESC
-    \`;
+    `;
     res.json({ ok: true, conflicts: conflicts });
   } catch(err) {
     console.error('[api/submissions conflicts]', err.message);
