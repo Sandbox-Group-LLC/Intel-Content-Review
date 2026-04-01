@@ -202,6 +202,49 @@ async function ensureSchema() {
   
   console.log('[MIGRATION] Column check complete.');
 
+  // Add gate deadline columns to events table
+  try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS gate_50_deadline TEXT`; console.log('[OK] gate_50_deadline'); } catch(e) { console.log('[SKIP] gate_50_deadline:', e.message); }
+  try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS gate_75_deadline TEXT`; console.log('[OK] gate_75_deadline'); } catch(e) { console.log('[SKIP] gate_75_deadline:', e.message); }
+  try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS gate_90_deadline TEXT`; console.log('[OK] gate_90_deadline'); } catch(e) { console.log('[SKIP] gate_90_deadline:', e.message); }
+
+  // Add disclosure_flag column to submissions
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS disclosure_flag BOOLEAN DEFAULT FALSE`; console.log('[OK] disclosure_flag'); } catch(e) { console.log('[SKIP] disclosure_flag:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS nda_required BOOLEAN DEFAULT FALSE`; console.log('[OK] nda_required'); } catch(e) { console.log('[SKIP] nda_required:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS nda_approver TEXT`; console.log('[OK] nda_approver'); } catch(e) { console.log('[SKIP] nda_approver:', e.message); }
+
+  // Create submission_gates table
+  try {
+    await sql\`
+      CREATE TABLE IF NOT EXISTS submission_gates (
+        id SERIAL PRIMARY KEY,
+        submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+        gate TEXT NOT NULL,
+        score INTEGER DEFAULT 0,
+        level TEXT DEFAULT 'pass',
+        checked_at TIMESTAMPTZ DEFAULT NOW(),
+        blocking_fields JSONB DEFAULT '[]',
+        UNIQUE(submission_id, gate)
+      )
+    \`;
+    console.log('[OK] submission_gates table');
+  } catch(e) { console.log('[SKIP] submission_gates:', e.message); }
+
+  // Create submission_conflicts table
+  try {
+    await sql\`
+      CREATE TABLE IF NOT EXISTS submission_conflicts (
+        id SERIAL PRIMARY KEY,
+        submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+        conflicting_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+        conflict_type TEXT,
+        description TEXT,
+        detected_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(submission_id, conflicting_id, conflict_type)
+      )
+    \`;
+    console.log('[OK] submission_conflicts table');
+  } catch(e) { console.log('[SKIP] submission_conflicts:', e.message); }
+
   // Create submission_speakers junction table for many-to-many relationship
   console.log('[MIGRATION] Creating submission_speakers junction table...');
   try {
@@ -378,6 +421,174 @@ app.get('/api/events', async function (req, res) {
   }
 });
 
+// ─── GATE EVALUATION ENGINE ──────────────────────────────────────────────────
+
+function evaluateGate(submission, gate) {
+  // Returns { score: 0-100, level: 'pass'|'warn'|'block', blocking_fields: [] }
+  var fields = [];
+  var blocking = [];
+
+  if (gate === 'gate_50') {
+    // Required: title, abstract (100+ chars), bu, track, format, duration, at least one intel speaker
+    if (!submission.title || submission.title.trim().length < 3) {
+      fields.push({ field: 'title', label: 'Session title', required: true });
+    }
+    if (!submission.abstract || submission.abstract.trim().length < 100) {
+      fields.push({ field: 'abstract', label: 'Abstract (min 100 characters)', required: true });
+    }
+    if (!submission.bu || submission.bu.trim().length < 1) {
+      fields.push({ field: 'bu', label: 'Business Unit (BU)', required: true });
+    }
+    if (!submission.track || submission.track.trim().length < 1) {
+      fields.push({ field: 'track', label: 'Content track', required: true });
+    }
+    if (!submission.format || submission.format.trim().length < 1) {
+      fields.push({ field: 'format', label: 'Session format', required: true });
+    }
+    if (!submission.duration || submission.duration.trim().length < 1) {
+      fields.push({ field: 'duration', label: 'Duration', required: true });
+    }
+    if (!submission.content_lead || submission.content_lead.trim().length < 2) {
+      fields.push({ field: 'content_lead', label: 'At least one Intel speaker / content lead named', required: true });
+    }
+  }
+
+  if (gate === 'gate_75') {
+    // All gate_50 fields plus: key_topics, featured_products, partner/demo status declared
+    var g50 = evaluateGate(submission, 'gate_50');
+    fields = fields.concat(g50.blocking_fields);
+    if (!submission.key_topics || submission.key_topics.trim().length < 5) {
+      fields.push({ field: 'key_topics', label: 'Key topics populated', required: true });
+    }
+    if (!submission.featured_products || submission.featured_products.trim().length < 3) {
+      fields.push({ field: 'featured_products', label: 'Featured Intel products named', required: true });
+    }
+    // Partner and demo status must be declared — even "none" is acceptable
+    var demosDeclared = submission.demos && submission.demos.trim().length > 0;
+    var partnerDeclared = submission.partner_highlights && submission.partner_highlights.trim().length > 0;
+    if (!demosDeclared) {
+      fields.push({ field: 'demos', label: 'Demo status declared (or "None")', required: true });
+    }
+    if (!partnerDeclared) {
+      fields.push({ field: 'partner_highlights', label: 'Partner status declared (or "None")', required: true });
+    }
+  }
+
+  if (gate === 'gate_90') {
+    // All gate_75 fields plus: new_launches reviewed, abstract quality threshold (200+ chars)
+    var g75 = evaluateGate(submission, 'gate_75');
+    fields = fields.concat(g75.blocking_fields);
+    if (!submission.new_launches || submission.new_launches.trim().length < 1) {
+      fields.push({ field: 'new_launches', label: 'New launches / disclosures reviewed and declared', required: true });
+    }
+    if (!submission.abstract || submission.abstract.trim().length < 200) {
+      fields.push({ field: 'abstract', label: 'Abstract meets quality threshold (min 200 characters for 90% gate)', required: true });
+    }
+    // business_challenge should be populated
+    if (!submission.business_challenge || submission.business_challenge.trim().length < 5) {
+      fields.push({ field: 'business_challenge', label: 'Business challenge defined', required: true });
+    }
+  }
+
+  // Deduplicate fields by field name
+  var seen = {};
+  var uniqueFields = [];
+  for (var i = 0; i < fields.length; i++) {
+    if (!seen[fields[i].field]) {
+      seen[fields[i].field] = true;
+      uniqueFields.push(fields[i]);
+      blocking.push(fields[i]);
+    }
+  }
+
+  // Score: 0 blocking = 0 score issues; each blocking field adds proportional weight
+  var maxFields = gate === 'gate_50' ? 7 : gate === 'gate_75' ? 11 : 14;
+  var passedFields = maxFields - blocking.length;
+  var score = Math.round((blocking.length / maxFields) * 100);
+
+  // Level thresholds: 0-49 pass, 50-79 warn, 80-100 block
+  var level = score < 50 ? 'pass' : score < 80 ? 'warn' : 'block';
+
+  return { score: score, level: level, blocking_fields: blocking };
+}
+
+function scanDisclosureFlags(submission) {
+  // Scan abstract and key_topics for disclosure-sensitive language
+  var sensitivePatterns = [
+    /new launch/i, /announcing/i, /world first/i, /first ever/i,
+    /not yet announced/i, /coming soon/i, /under nda/i,
+    /confidential/i, /pre-release/i, /prerelease/i,
+    /embargo/i, /not public/i, /future product/i,
+    /roadmap/i, /unreleased/i, /pre-production/i
+  ];
+  var text = ((submission.abstract || '') + ' ' + (submission.key_topics || '') + ' ' + (submission.new_launches || '')).toLowerCase();
+  for (var i = 0; i < sensitivePatterns.length; i++) {
+    if (sensitivePatterns[i].test(text)) return true;
+  }
+  return false;
+}
+
+// ─── GATE API ROUTES ──────────────────────────────────────────────────────────
+
+// GET gate status for a submission
+app.get('/api/submissions/:id/gates', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var subResult = await sql\`SELECT * FROM submissions WHERE id = ${id}\`;
+    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var sub = subResult[0];
+
+    var gates = ['gate_50', 'gate_75', 'gate_90'];
+    var results = {};
+    for (var i = 0; i < gates.length; i++) {
+      var g = gates[i];
+      var eval_result = evaluateGate(sub, g);
+      results[g] = eval_result;
+      // Upsert into submission_gates
+      await sql\`
+        INSERT INTO submission_gates (submission_id, gate, score, level, checked_at, blocking_fields)
+        VALUES (${id}, ${g}, ${eval_result.score}, ${eval_result.level}, NOW(), ${JSON.stringify(eval_result.blocking_fields)})
+        ON CONFLICT (submission_id, gate) DO UPDATE SET
+          score = EXCLUDED.score,
+          level = EXCLUDED.level,
+          checked_at = EXCLUDED.checked_at,
+          blocking_fields = EXCLUDED.blocking_fields
+      \`;
+    }
+
+    // Check and update disclosure flag
+    var flagged = scanDisclosureFlags(sub);
+    if (flagged !== sub.disclosure_flag) {
+      await sql\`UPDATE submissions SET disclosure_flag = ${flagged} WHERE id = ${id}\`;
+    }
+
+    res.json({ ok: true, gates: results, disclosure_flag: flagged });
+  } catch(err) {
+    console.error('[api/submissions gates]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET conflicts for a submission
+app.get('/api/submissions/:id/conflicts', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var conflicts = await sql\`
+      SELECT sc.*, s.title as conflicting_title, s.track as conflicting_track, s.bu as conflicting_bu
+      FROM submission_conflicts sc
+      JOIN submissions s ON s.id = sc.conflicting_id
+      WHERE sc.submission_id = ${id}
+      ORDER BY sc.detected_at DESC
+    \`;
+    res.json({ ok: true, conflicts: conflicts });
+  } catch(err) {
+    console.error('[api/submissions conflicts]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // IMPORTANT: generate-profile must be before /api/events/:id
 app.post('/api/events/generate-profile', async function (req, res) {
   try {
@@ -426,6 +637,9 @@ app.put('/api/events/:id', async function (req, res) {
     var slot_count = parseInt(body.total_slots || body.slot_count) || 0;
     var context_profile = body.context_profile || '';
     var ai_system_prompt = body.ai_system_prompt || '';
+    var gate_50_deadline = body.gate_50_deadline || null;
+    var gate_75_deadline = body.gate_75_deadline || null;
+    var gate_90_deadline = body.gate_90_deadline || null;
     var result = await sql`
       UPDATE events SET
         name = ${name},
@@ -433,7 +647,10 @@ app.put('/api/events/:id', async function (req, res) {
         venue = ${venue},
         slot_count = ${slot_count},
         context_profile = ${context_profile},
-        ai_system_prompt = ${ai_system_prompt}
+        ai_system_prompt = ${ai_system_prompt},
+        gate_50_deadline = ${gate_50_deadline},
+        gate_75_deadline = ${gate_75_deadline},
+        gate_90_deadline = ${gate_90_deadline}
       WHERE id = ${id}
       RETURNING *
     `;
@@ -556,7 +773,38 @@ app.post('/api/submissions', async function (req, res) {
       }
     }
     
-    res.json({ ok: true, submission: submission });
+    // ── Run conflict detection ──
+    try {
+      var allSubs = await sql`
+        SELECT id, title, track, key_topics FROM submissions
+        WHERE event_id = ${submission.event_id} AND id != ${submission.id}
+      `;
+      for (var ci = 0; ci < allSubs.length; ci++) {
+        var other = allSubs[ci];
+        if (other.track && submission.track && other.track === submission.track) {
+          var myTopics = (submission.key_topics || '').toLowerCase().split(/[,;]+/).map(function(t) { return t.trim(); }).filter(Boolean);
+          var theirTopics = (other.key_topics || '').toLowerCase().split(/[,;]+/).map(function(t) { return t.trim(); }).filter(Boolean);
+          var overlap = myTopics.filter(function(t) { return theirTopics.some(function(tt) { return tt.includes(t) || t.includes(tt); }); });
+          if (overlap.length > 0) {
+            await sql`
+              INSERT INTO submission_conflicts (submission_id, conflicting_id, conflict_type, description)
+              VALUES (${submission.id}, ${other.id}, 'topic_overlap', ${'Same track (' + submission.track + ') with overlapping topics: ' + overlap.slice(0,3).join(', ')})
+              ON CONFLICT (submission_id, conflicting_id, conflict_type) DO NOTHING
+            `;
+          }
+        }
+      }
+    } catch(ce) { console.log('[conflict detection]', ce.message); }
+
+    // ── Run initial gate evaluation and disclosure scan ──
+    var gateResults = {};
+    ['gate_50', 'gate_75', 'gate_90'].forEach(function(g) { gateResults[g] = evaluateGate(submission, g); });
+    var disclosureFlagged = scanDisclosureFlags(submission);
+    if (disclosureFlagged) {
+      try { await sql`UPDATE submissions SET disclosure_flag = true WHERE id = ${submission.id}`; } catch(e) {}
+    }
+
+    res.json({ ok: true, submission: submission, gates: gateResults, disclosure_flag: disclosureFlagged });
   } catch (err) {
     console.error('[api/submissions POST]', err.message);
     res.status(500).json({ ok: false, error: err.message });
@@ -674,7 +922,9 @@ app.put('/api/submissions/:id', async function (req, res) {
         partner_highlights = COALESCE(${b.partner_highlights}, partner_highlights),
         new_launches = COALESCE(${b.new_launches}, new_launches),
         reviewer_notes = COALESCE(${b.reviewer_notes}, reviewer_notes),
-        status = COALESCE(${b.status}, status)
+        status = COALESCE(${b.status}, status),
+        nda_required = COALESCE(${b.nda_required}, nda_required),
+        nda_approver = COALESCE(${b.nda_approver}, nda_approver)
       WHERE id = ${id}
       RETURNING *
     `;
@@ -682,7 +932,33 @@ app.put('/api/submissions/:id', async function (req, res) {
     if (!result.length) {
       return res.status(404).json({ ok: false, error: 'Submission not found' });
     }
-    
+
+    // ── Gate enforcement on status advancement ──
+    var newStatus = b.status;
+    var gateBlockedMessages = [];
+    if (newStatus && ['under_review', 'approved'].includes(newStatus)) {
+      var sub = result[0];
+      var gateToCheck = newStatus === 'approved' ? 'gate_90' : 'gate_50';
+      var gateEval = evaluateGate(sub, gateToCheck);
+      if (gateEval.level === 'block') {
+        return res.status(422).json({
+          ok: false,
+          error: 'Gate blocked: submission cannot advance to ' + newStatus + ' until blocking issues are resolved.',
+          gate: gateToCheck,
+          gate_result: gateEval
+        });
+      }
+      if (gateEval.level === 'warn') {
+        gateBlockedMessages.push({ gate: gateToCheck, level: 'warn', blocking_fields: gateEval.blocking_fields });
+      }
+    }
+
+    // Run disclosure flag scan on every save
+    var flagged = scanDisclosureFlags(result[0]);
+    if (flagged !== result[0].disclosure_flag) {
+      await sql`UPDATE submissions SET disclosure_flag = ${flagged} WHERE id = ${id}`;
+    }
+
     // Handle speaker_ids array if provided
     if (b.speaker_ids !== undefined) {
       var speakerIds = b.speaker_ids || [];
@@ -700,7 +976,7 @@ app.put('/api/submissions/:id', async function (req, res) {
       }
     }
     
-    res.json({ ok: true, submission: result[0] });
+    res.json({ ok: true, submission: result[0], gate_warnings: gateBlockedMessages });
   } catch (err) {
     console.error('[api/submissions PUT]', err.message);
     res.status(500).json({ ok: false, error: err.message });
