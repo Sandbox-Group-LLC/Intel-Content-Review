@@ -418,16 +418,18 @@ GET  /api/analytics/trends                     → Cross-event trend intelligenc
 
 ## Build Order & Checklist
 
+> **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
+
 ### Phase 1 — Quality Gates & Compliance
-- [ ] Define gate field requirements and scoring weights
-- [ ] Build gate evaluation function (returns score 0-100 + level + blocking fields)
-- [ ] Add `submission_gates` table to schema
-- [ ] Gate checklist UI on submission detail (green / amber / red per field)
-- [ ] Enforce Pass/Warn/Block on status advancement
-- [ ] Compliance flag: auto-detect disclosure language in abstract
-- [ ] NDA field surfaced prominently in submission form
-- [ ] Conflict/overlap detection on submission save (Voyager similarity)
-- [ ] Update README with gate requirements and enforcement levels
+- [x] Define gate field requirements and scoring weights
+- [x] Build gate evaluation function — evaluateGate() returns score 0-100 + pass/warn/block + blocking_fields
+- [x] Add `submission_gates` table to schema
+- [x] Gate checklist UI on submission detail — loads async, color-coded Pass/Warn/Block per gate
+- [x] Enforce Pass/Warn/Block on status advancement — block returns 422, warn proceeds with advisory
+- [x] Compliance flag: scanDisclosureFlags() detects roadmap/launch/NDA language, runs on every save
+- [x] NDA fields (nda_required, nda_approver) added to DB and surfaced as amber banner in submission detail
+- [x] Conflict/overlap detection on submission save — keyword overlap within same track, stored in submission_conflicts
+- [ ] Update README with gate requirements and enforcement levels ← next
 
 ### Phase 2 — Voyager AI Memory Brain
 - [ ] Enable pgvector on Neon (`CREATE EXTENSION IF NOT EXISTS vector`)
