@@ -2,6 +2,12 @@ var express = require('express');
 var path = require('path');
 var axios = require('axios');
 var { neon } = require('@neondatabase/serverless');
+var { Resend } = require('resend');
+var crypto = require('crypto');
+
+function getResend() { return new Resend(process.env.RESEND_API_KEY); }
+var APP_URL = process.env.APP_URL || 'https://intel-event-content-review.forge-os.ai';
+var FROM_EMAIL = process.env.EMAIL_FROM || 'Intel Content Review <noreply@forge-os.ai>';
 var showdown = require('showdown');
 var multer = require('multer');
 
@@ -331,6 +337,21 @@ async function ensureSchema() {
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS memory_insights JSONB`; console.log('[OK] memory_insights'); } catch(e) { console.log('[SKIP] memory_insights:', e.message); }
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1`; console.log('[OK] version_number'); } catch(e) { console.log('[SKIP] version_number:', e.message); }
 
+  // ── PHASE 3: Auth, coaching, portal fields ───────────────────────────────
+  try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS slug TEXT`; console.log('[OK] events.slug'); } catch(e) { console.log('[SKIP] events.slug:', e.message); }
+  try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS notification_email TEXT`; console.log('[OK] notification_email'); } catch(e) { console.log('[SKIP] notification_email:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS coaching_report JSONB`; console.log('[OK] coaching_report'); } catch(e) { console.log('[SKIP] coaching_report:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS score_delta INTEGER DEFAULT 0`; console.log('[OK] score_delta'); } catch(e) { console.log('[SKIP] score_delta:', e.message); }
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS magic_link_tokens (
+      id SERIAL PRIMARY KEY, token TEXT UNIQUE NOT NULL,
+      submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+      email TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW()
+    )`;
+    console.log('[OK] magic_link_tokens table');
+  } catch(e) { console.log('[SKIP] magic_link_tokens:', e.message); }
+
   // Create submission_speakers junction table for many-to-many relationship
   console.log('[MIGRATION] Creating submission_speakers junction table...');
   try {
@@ -506,6 +527,61 @@ app.get('/api/events', async function (req, res) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// ─── EMAIL & MAGIC LINK HELPERS ──────────────────────────────────────────────
+
+async function sendEmail(to, subject, html) {
+  try {
+    var resend = getResend();
+    if (!process.env.RESEND_API_KEY) { console.log('[Email] No RESEND_API_KEY — skipping:', subject); return false; }
+    await resend.emails.send({ from: FROM_EMAIL, to: to, subject: subject, html: html });
+    console.log('[Email] Sent:', subject, '->', to);
+    return true;
+  } catch(e) {
+    console.error('[Email] Failed:', e.message);
+    return false;
+  }
+}
+
+function generateToken() { return crypto.randomBytes(32).toString('hex'); }
+
+async function createMagicLink(submissionId, email, sql) {
+  var token = generateToken();
+  var expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+  await sql`INSERT INTO magic_link_tokens (token, submission_id, email, expires_at) VALUES (${token}, ${submissionId}, ${email}, ${expiresAt.toISOString()}) ON CONFLICT (token) DO NOTHING`;
+  return APP_URL + '/submit/token/' + token;
+}
+
+async function notifyScored(submission, event) {
+  if (!submission.content_lead) return;
+  var email = submission.content_lead.includes('@') ? submission.content_lead : submission.content_lead.toLowerCase().replace(/\s+/g, '.').replace(/[^a-z.]/g, '') + '@intel.com';
+  var overall = submission.ai_score ? (submission.ai_score.overall || submission.ai_score.overall_score || '—') : '—';
+  await sendEmail(email, 'Your session has been scored — ' + submission.title,
+    '<div style="font-family:Arial,sans-serif;max-width:600px"><h2 style="color:#000864">Session Scored</h2>' +
+    '<p>Your session <strong>' + submission.title + '</strong> has been reviewed.</p>' +
+    '<p><strong>Overall Score: ' + overall + ' / 100</strong></p>' +
+    '<p style="color:#666;font-size:12px">Intel Content Review</p></div>');
+}
+
+async function notifyStatusChange(submission, event, newStatus) {
+  if (!submission.content_lead) return;
+  var email = submission.content_lead.includes('@') ? submission.content_lead : submission.content_lead.toLowerCase().replace(/\s+/g, '.').replace(/[^a-z.]/g, '') + '@intel.com';
+  var labels = { submitted:'Submitted', under_review:'Under Review', approved:'Approved', declined:'Declined', needs_revision:'Needs Revision' };
+  await sendEmail(email, 'Status update: ' + submission.title + ' is now ' + (labels[newStatus]||newStatus),
+    '<div style="font-family:Arial,sans-serif;max-width:600px"><h2 style="color:#000864">Status Updated</h2>' +
+    '<p>Your session <strong>' + submission.title + '</strong> status: <strong>' + (labels[newStatus]||newStatus) + '</strong></p>' +
+    '<p style="color:#666;font-size:12px">Intel Content Review</p></div>');
+}
+
+async function notifyGateBlocked(submission, event, gate) {
+  if (!submission.content_lead) return;
+  var email = submission.content_lead.includes('@') ? submission.content_lead : submission.content_lead.toLowerCase().replace(/\s+/g, '.').replace(/[^a-z.]/g, '') + '@intel.com';
+  var labels = { gate_50:'50%', gate_75:'75%', gate_90:'90%' };
+  await sendEmail(email, 'Action required: ' + submission.title + ' blocked at ' + (labels[gate]||gate) + ' review',
+    '<div style="font-family:Arial,sans-serif;max-width:600px"><h2 style="color:#CC0000">Submission Blocked</h2>' +
+    '<p>Your session <strong>' + submission.title + '</strong> cannot advance. Please complete required fields.</p>' +
+    '<p style="color:#666;font-size:12px">Intel Content Review</p></div>');
+}
 
 // ─── VOYAGER AI EMBEDDING CLIENT ─────────────────────────────────────────────
 
@@ -786,7 +862,9 @@ app.put('/api/events/:id', async function (req, res) {
         ai_system_prompt = ${ai_system_prompt},
         gate_50_deadline = ${gate_50_deadline},
         gate_75_deadline = ${gate_75_deadline},
-        gate_90_deadline = ${gate_90_deadline}
+        gate_90_deadline = ${gate_90_deadline},
+        slug = COALESCE(${body.slug||null}, slug),
+        notification_email = COALESCE(${body.notification_email||null}, notification_email)
       WHERE id = ${id}
       RETURNING *
     `;
@@ -1002,6 +1080,18 @@ app.post('/api/submissions/:id/score', async function (req, res) {
     ].join('\n');
     var scorecard = await callClaude(evt.ai_system_prompt + memoryContext, userPrompt, true);
     await sql`UPDATE submissions SET ai_score = ${JSON.stringify(scorecard)}, memory_insights = ${JSON.stringify(memoryInsights)} WHERE id = ${id}`;
+    try {
+      var evtForScore = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+      if (evtForScore.length) notifyScored(sub, evtForScore[0]).catch(function(){});
+    } catch(ne) {}
+    try {
+      var firstVer = await sql`SELECT ai_score FROM submission_versions WHERE submission_id = ${id} ORDER BY version_number ASC LIMIT 1`;
+      if (firstVer.length && firstVer[0].ai_score) {
+        var fs = firstVer[0].ai_score.overall || firstVer[0].ai_score.overall_score || 0;
+        var cs = scorecard.overall || scorecard.overall_score || 0;
+        await sql`UPDATE submissions SET score_delta = ${cs - fs} WHERE id = ${id}`;
+      }
+    } catch(de) {}
     res.json({ ok: true, scorecard: scorecard, memory_insights: memoryInsights });
   } catch (err) {
     console.error('[submissions/score]', err.message);
@@ -1128,6 +1218,17 @@ app.put('/api/submissions/:id', async function (req, res) {
       }
     }
     
+    // ── Fire status change notification ──
+    try {
+      if (b.status && result[0] && b.status !== result[0].status) {
+        var evtN = await sql`SELECT * FROM events WHERE id = ${result[0].event_id}`;
+        if (evtN.length) {
+          notifyStatusChange(result[0], evtN[0], b.status).catch(function(){});
+          if (gateBlockedMessages.length > 0) notifyGateBlocked(result[0], evtN[0], gateBlockedMessages[0].gate).catch(function(){});
+        }
+      }
+    } catch(ne) { console.log('[notify]', ne.message); }
+
     // ── Save version snapshot ──
     try {
       var sub = result[0];
@@ -1146,6 +1247,287 @@ app.put('/api/submissions/:id', async function (req, res) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+
+// ─── PHASE 3: COACHING, MAGIC LINK, SUBMITTER PORTAL ────────────────────────
+
+// POST generate coaching report for a submission
+app.post('/api/submissions/:id/coach', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var sub = subResult[0];
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+    var gate90 = evaluateGate(sub, 'gate_90');
+    var memoryContext = '';
+    try {
+      var coachText = (sub.title||'') + ' ' + (sub.abstract||'') + ' ' + (sub.track||'');
+      var coachEmbed = await generateEmbedding(coachText);
+      var coachMems = await searchMemories(coachEmbed, evt.id, 3);
+      if (coachMems.length > 0) {
+        memoryContext = 'Past event insights:\n';
+        coachMems.forEach(function(m,i){ memoryContext += (i+1)+'. ['+m.category+'] '+m.content+'\n'; });
+      }
+    } catch(me) { console.log('[coach memory]', me.message); }
+    var sp = 'You are a content coaching expert for Intel events. Give specific, actionable coaching to help session owners improve submissions. Be direct. Return ONLY valid JSON.';
+    var up = [];
+    up.push('Event: '+evt.name);
+    up.push('Context: '+(evt.context_profile||'').slice(0,300));
+    up.push('Title: '+(sub.title||''));
+    up.push('Track: '+(sub.track||''));
+    up.push('Abstract: '+(sub.abstract||''));
+    up.push('Key topics: '+(sub.key_topics||''));
+    up.push('Products: '+(sub.featured_products||''));
+    up.push('Demos: '+(sub.demos||''));
+    up.push('Partners: '+(sub.partner_highlights||''));
+    up.push('Gate 90 blocking: '+JSON.stringify(gate90.blocking_fields.map(function(f){return f.label;})));
+    if (memoryContext) up.push(memoryContext);
+    up.push('Return JSON: {"critical_fixes":[{"issue":"","action":""}],"high_impact":[{"opportunity":"","action":"","expected_gain":""}],"quick_wins":[{"change":"","reason":""}],"past_event_examples":[{"lesson":"","application":""}],"overall_coaching_note":""}');
+    var report = await callClaude(sp, up.join('\n'), true);
+    await sql`UPDATE submissions SET coaching_report = ${JSON.stringify(report)} WHERE id = ${id}`;
+    res.json({ ok: true, report: report });
+  } catch(err) {
+    console.error('[api/coach]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET version history with diff data
+app.get('/api/submissions/:id/versions', async function(req, res) {
+  try {
+    var sql = getDb();
+    var versions = await sql`
+      SELECT id, version_number, edited_by, created_at,
+        snapshot->>'title' as title,
+        snapshot->>'abstract' as abstract,
+        snapshot->>'status' as status,
+        ai_score
+      FROM submission_versions
+      WHERE submission_id = ${req.params.id}
+      ORDER BY version_number DESC
+    `;
+    res.json({ ok: true, versions: versions });
+  } catch(err) {
+    console.error('[api/versions]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST send magic link to submitter
+app.post('/api/submissions/:id/magic-link', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var email = req.body.email;
+    if (!email) return res.status(400).json({ ok: false, error: 'email required' });
+    var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var sub = subResult[0];
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+    var evt = evtResult[0] || {};
+    var link = await createMagicLink(id, email, sql);
+    await sendEmail(email,
+      'Your Intel Content Review access link — ' + sub.title,
+      '<div style="font-family:Arial,sans-serif;max-width:600px">' +
+      '<h2 style="color:#000864">Access Your Submission</h2>' +
+      '<p>You have been invited to review your session for <strong>' + evt.name + '</strong>.</p>' +
+      '<p><strong>Session:</strong> ' + sub.title + '</p>' +
+      '<p><a href="' + link + '" style="background:#00AAE8;color:#fff;padding:12px 24px;text-decoration:none;font-weight:700;display:inline-block">View My Submission</a></p>' +
+      '<p style="color:#666;font-size:12px">Link expires in 72 hours. Intel Content Review.</p></div>'
+    );
+    res.json({ ok: true, message: 'Magic link sent to ' + email });
+  } catch(err) {
+    console.error('[api/magic-link]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET verify magic link token
+app.get('/api/submit/verify/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    var result = await sql`
+      SELECT t.*, s.*, e.name as event_name, e.context_profile
+      FROM magic_link_tokens t
+      JOIN submissions s ON s.id = t.submission_id
+      JOIN events e ON e.id = s.event_id
+      WHERE t.token = ${token} AND t.expires_at > NOW() AND t.used_at IS NULL
+    `;
+    if (!result.length) return res.status(401).json({ ok: false, error: 'Invalid or expired link.' });
+    res.json({ ok: true, submission: result[0], event_name: result[0].event_name });
+  } catch(err) {
+    console.error('[api/submit/verify]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT submitter updates via portal
+app.put('/api/submit/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    var b = req.body;
+    var tokenResult = await sql`SELECT * FROM magic_link_tokens WHERE token = ${token} AND expires_at > NOW() AND used_at IS NULL`;
+    if (!tokenResult.length) return res.status(401).json({ ok: false, error: 'Invalid or expired link' });
+    var submissionId = tokenResult[0].submission_id;
+    var email = tokenResult[0].email;
+    var result = await sql`
+      UPDATE submissions SET
+        abstract = COALESCE(${b.abstract||null}, abstract),
+        key_topics = COALESCE(${b.key_topics||null}, key_topics),
+        demos = COALESCE(${b.demos||null}, demos),
+        featured_products = COALESCE(${b.featured_products||null}, featured_products),
+        partner_highlights = COALESCE(${b.partner_highlights||null}, partner_highlights),
+        business_challenge = COALESCE(${b.business_challenge||null}, business_challenge),
+        version_number = COALESCE(version_number, 1) + 1
+      WHERE id = ${submissionId}
+      RETURNING *
+    `;
+    try {
+      var sub = result[0];
+      await sql`INSERT INTO submission_versions (submission_id, version_number, snapshot, ai_score, edited_by) VALUES (${submissionId}, ${sub.version_number}, ${JSON.stringify(sub)}, ${sub.ai_score ? JSON.stringify(sub.ai_score) : null}, ${email})`;
+    } catch(ve) {}
+    try {
+      var evtR = await sql`SELECT * FROM events WHERE id = ${result[0].event_id}`;
+      var evt = evtR[0] || {};
+      if (evt.notification_email) {
+        await sendEmail(evt.notification_email,
+          email + ' updated their submission — ' + result[0].title,
+          '<div style="font-family:Arial,sans-serif;max-width:600px">' +
+          '<h2 style="color:#000864">Submission Updated</h2>' +
+          '<p><strong>' + email + '</strong> updated: ' + result[0].title + '</p>' +
+          '<p>Log in to review changes and re-score if needed.</p></div>'
+        );
+      }
+    } catch(ne) {}
+    res.json({ ok: true, submission: result[0] });
+  } catch(err) {
+    console.error('[api/submit PUT]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET submitter portal page
+app.get('/submit/token/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    var tokenResult = await sql`
+      SELECT t.*, s.title, s.abstract, s.key_topics, s.demos, s.featured_products,
+        s.partner_highlights, s.business_challenge, s.track, s.bu, s.format, s.duration,
+        s.ai_score, s.coaching_report, s.version_number, s.score_delta,
+        e.name as event_name, e.context_profile, e.id as event_id
+      FROM magic_link_tokens t
+      JOIN submissions s ON s.id = t.submission_id
+      JOIN events e ON e.id = s.event_id
+      WHERE t.token = ${token}
+    `;
+    var expired = !tokenResult.length || new Date(tokenResult[0].expires_at) < new Date() || tokenResult[0].used_at;
+    var sub = tokenResult.length ? tokenResult[0] : null;
+    var score = sub && sub.ai_score ? (typeof sub.ai_score === 'string' ? JSON.parse(sub.ai_score) : sub.ai_score) : null;
+    var overall = score ? (score.overall || score.overall_score || null) : null;
+    var scoreCls = overall === null ? 'score-na' : overall >= 80 ? 'score-high' : overall >= 60 ? 'score-mid' : 'score-low';
+    var coaching = sub && sub.coaching_report ? (typeof sub.coaching_report === 'string' ? JSON.parse(sub.coaching_report) : sub.coaching_report) : null;
+    var css = [
+      '@font-face{font-family:IntelOneDisplay;font-weight:300;src:url("/api/assets/intelone-display-light.woff") format("woff")}',
+      '@font-face{font-family:IntelOneDisplay;font-weight:400;src:url("/api/assets/intelone-display-regular.woff") format("woff")}',
+      '@font-face{font-family:IntelOneDisplay;font-weight:700;src:url("/api/assets/intelone-display-bold.woff") format("woff")}',
+      '*{box-sizing:border-box;border-radius:0;margin:0;padding:0}',
+      'body{font-family:IntelOneDisplay,Arial,sans-serif;background:#EAEAEA;color:#2E2F2F}',
+      'header{background:#000864;padding:16px 24px;display:flex;align-items:center;gap:16px}',
+      'header img{height:28px}',
+      'header span{color:#fff;font-weight:700;font-size:18px}',
+      '.container{max-width:800px;margin:32px auto;padding:0 16px}',
+      '.card{background:#fff;border:1px solid #EAEAEA;padding:24px;margin-bottom:16px}',
+      'h2{font-size:20px;font-weight:700;color:#000864;margin-bottom:16px}',
+      'h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}',
+      'label{font-size:12px;font-weight:700;display:block;margin-bottom:4px}',
+      'input,textarea{width:100%;border:1px solid #2E2F2F;padding:10px;font-family:inherit;font-size:14px;background:#fff;margin-bottom:12px}',
+      'textarea{min-height:120px;resize:vertical}',
+      '.btn{background:#00AAE8;color:#fff;border:none;padding:12px 24px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer}',
+      '.badge{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;color:#fff}',
+      '.score-high{background:#007A3D}.score-mid{background:#B8860B}.score-low{background:#CC0000}.score-na{background:#6B6B6B}',
+      '.alert-info{background:#EEF6FB;border:1px solid #00AAE8;padding:12px;margin-bottom:10px;font-size:13px}',
+      '.alert-warn{background:#FFF8EC;border:1px solid #B8860B;padding:12px;margin-bottom:10px;font-size:13px}',
+      '.alert-err{background:#FFF0F0;border:1px solid #CC0000;padding:12px;margin-bottom:10px;font-size:13px}',
+      '#msg{margin-top:12px;font-size:13px}'
+    ].join('\n');
+    var bodyContent = '';
+    if (expired || !sub) {
+      bodyContent = '<div class="card"><div class="alert-err">This link has expired or is invalid. Please contact your event coordinator for a new access link.</div></div>';
+    } else {
+      bodyContent += '<div class="card">';
+      bodyContent += '<h2>' + (sub.title||'Your Submission') + '</h2>';
+      bodyContent += '<div style="font-size:13px;color:#666;margin-bottom:8px">' + (sub.event_name||'') + ' &middot; ' + (sub.track||'') + ' &middot; Version ' + (sub.version_number||1) + '</div>';
+      if (overall !== null) {
+        bodyContent += '<div style="margin-bottom:8px">AI Score: <span class="badge ' + scoreCls + '">' + overall + ' / 100</span>';
+        if (sub.score_delta && sub.score_delta !== 0) bodyContent += ' <span style="color:' + (sub.score_delta > 0 ? '#007A3D' : '#CC0000') + ';font-size:12px">' + (sub.score_delta > 0 ? '&#9650;' : '&#9660;') + Math.abs(sub.score_delta) + ' from v1</span>';
+        bodyContent += '</div>';
+      } else {
+        bodyContent += '<div style="margin-bottom:8px"><span class="badge score-na">Not yet scored</span></div>';
+      }
+      bodyContent += '</div>';
+      if (coaching) {
+        bodyContent += '<div class="card"><h3>Coaching Report</h3>';
+        if (coaching.overall_coaching_note) bodyContent += '<div class="alert-info">' + coaching.overall_coaching_note + '</div>';
+        if (coaching.critical_fixes && coaching.critical_fixes.length) {
+          bodyContent += '<h3 style="color:#CC0000;margin-top:12px">Critical Fixes</h3>';
+          coaching.critical_fixes.forEach(function(f){ bodyContent += '<div class="alert-err"><strong>' + f.issue + '</strong><br>' + f.action + '</div>'; });
+        }
+        if (coaching.high_impact && coaching.high_impact.length) {
+          bodyContent += '<h3 style="color:#B8860B;margin-top:12px">High Impact</h3>';
+          coaching.high_impact.forEach(function(f){ bodyContent += '<div class="alert-warn"><strong>' + f.opportunity + '</strong><br>' + f.action + '</div>'; });
+        }
+        if (coaching.quick_wins && coaching.quick_wins.length) {
+          bodyContent += '<h3 style="color:#007A3D;margin-top:12px">Quick Wins</h3>';
+          coaching.quick_wins.forEach(function(f){ bodyContent += '<div style="padding:8px;background:#F0FAF5;border-left:3px solid #007A3D;margin-bottom:6px;font-size:13px"><strong>' + f.change + '</strong><br>' + f.reason + '</div>'; });
+        }
+        bodyContent += '</div>';
+      }
+      bodyContent += '<div class="card"><h3>Update Your Submission</h3>';
+      bodyContent += '<p style="font-size:13px;color:#666;margin-bottom:16px">You can update content fields below. Your reviewer will be notified.</p>';
+      bodyContent += '<label>Abstract</label><textarea id="f-abstract">' + (sub.abstract||'') + '</textarea>';
+      bodyContent += '<label>Key Topics</label><textarea id="f-topics" style="min-height:80px">' + (sub.key_topics||'') + '</textarea>';
+      bodyContent += '<label>Featured Intel Products</label><input id="f-products" value="' + (sub.featured_products||'') + '">';
+      bodyContent += '<label>Demos</label><input id="f-demos" value="' + (sub.demos||'') + '">';
+      bodyContent += '<label>Partner Highlights</label><input id="f-partners" value="' + (sub.partner_highlights||'') + '">';
+      bodyContent += '<label>Business Challenge</label><textarea id="f-challenge" style="min-height:80px">' + (sub.business_challenge||'') + '</textarea>';
+      bodyContent += '<button type="button" class="btn" onclick="saveSubmission()">Save Updates</button>';
+      bodyContent += '<div id="msg"></div></div>';
+    }
+    var js = 'var TOKEN=' + JSON.stringify(token) + ';' +
+      'async function saveSubmission(){' +
+        'var msg=document.getElementById("msg");msg.textContent="Saving...";' +
+        'var body={abstract:document.getElementById("f-abstract").value,' +
+          'key_topics:document.getElementById("f-topics").value,' +
+          'featured_products:document.getElementById("f-products").value,' +
+          'demos:document.getElementById("f-demos").value,' +
+          'partner_highlights:document.getElementById("f-partners").value,' +
+          'business_challenge:document.getElementById("f-challenge").value};' +
+        'try{var r=await fetch("/api/submit/"+TOKEN,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});' +
+        'var data=await r.json();' +
+        'if(data.ok){msg.style.color="#007A3D";msg.textContent="\u2713 Saved. Your reviewer has been notified.";}' +
+        'else{msg.style.color="#CC0000";msg.textContent="Error: "+(data.error||"Save failed");}' +
+        '}catch(e){msg.style.color="#CC0000";msg.textContent="Error: "+e.message;}}';
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>Intel Content Review &mdash; Submission Portal</title>' +
+      '<style>' + css + '</style></head><body>' +
+      '<header><img src="/api/assets/Logo.png" alt="Intel"><span>Content Review &mdash; Submission Portal</span></header>' +
+      '<div class="container">' + bodyContent + '</div>' +
+      '<script>' + js + '</scr' + 'ipt></body></html>';
+    res.send(html);
+  } catch(err) {
+    console.error('[submit portal]', err.message);
+    res.status(500).send('<p>Something went wrong. Please try again.</p>');
+  }
+});
+
 
 // ─── PHASE 2: MEMORY BRAIN API ──────────────────────────────────────────────
 
