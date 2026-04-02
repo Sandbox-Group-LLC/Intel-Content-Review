@@ -796,6 +796,9 @@ async function viewSubmission(id) {
     saveNotes(id, document.getElementById('notes-field').value);
   });
   document.getElementById('btn-run-score').addEventListener('click', function() { scoreSubmission(id); });
+  document.getElementById('btn-run-coach').addEventListener('click', function() { runCoaching(id); });
+  document.getElementById('btn-send-magic').addEventListener('click', function() { sendMagicLink(id, s); });
+  document.getElementById('btn-view-versions').addEventListener('click', function() { loadVersionHistory(id); });
   
   openPanel();
 }
