@@ -355,6 +355,7 @@ async function ensureSchema() {
 
   // ── v2.1 PHASE 1: CFP schema ─────────────────────────────────────────────
   await ensureCFPSchema(sql);
+  await ensureJobsSchema(sql);
   try {
     await sql`CREATE TABLE IF NOT EXISTS magic_link_tokens (
       id SERIAL PRIMARY KEY, token TEXT UNIQUE NOT NULL,
@@ -1053,123 +1054,13 @@ app.post('/api/submissions/:id/score', async function (req, res) {
   try {
     var sql = getDb();
     var id = req.params.id;
-    // Clear any stale score so UI knows work is in progress
-    await sql`UPDATE submissions SET ai_score = NULL WHERE id = ${id}`;
-    // Return immediately — do heavy work async to beat Render's 30s timeout
-    res.json({ ok: true, status: 'running', message: 'Scoring started' });
-    setImmediate(async function() { try {
-    var subResult = await sql`
-      SELECT
-        s.id, s.event_id, s.speaker_id, s.title, s.content_lead, s.bu, s.track,
-        s.format, s.duration, s.abstract, s.key_topics, s.demos,
-        s.featured_products, s.business_challenge, s.partner_highlights,
-        s.new_launches, s.reviewer_notes, s.status, s.ai_score,
-        s.enriched_abstract, s.source, s.created_at,
-        (
-          SELECT string_agg(sp.full_name, ', ' ORDER BY sp.full_name)
-          FROM submission_speakers ss
-          JOIN speakers sp ON sp.id = ss.speaker_id
-          WHERE ss.submission_id = s.id
-        ) as speaker_names
-      FROM submissions s
-      WHERE s.id = ${id}
-    `;
-    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
-    var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
-    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
-    var evt = evtResult[0];
-    if (!evt.ai_system_prompt) return res.status(400).json({ ok: false, error: 'AI system prompt not configured for this event.' });
-    // ── Memory-augmented scoring: retrieve relevant past lessons ──
-    var memoryContext = '';
-    var memoryInsights = [];
-    try {
-      var scoringText = (sub.title || '') + ' ' + (sub.abstract || '') + ' ' + (sub.key_topics || '');
-      var scoringEmbedding = await generateEmbedding(scoringText);
-      var relevantMemories = await searchMemories(scoringEmbedding, evt.id, 5);
-      if (relevantMemories.length > 0) {
-        memoryContext = '\n\nPAST EVENT INSIGHTS (factor these into your scoring):\n';
-        relevantMemories.forEach(function(m, idx) {
-          memoryContext += (idx + 1) + '. [' + m.category.toUpperCase() + '] ' + m.content + '\n';
-          memoryInsights.push({ id: m.id, category: m.category, content: m.content.slice(0, 150), similarity: parseFloat(m.similarity) });
-        });
-      }
-    } catch(me) { console.log('[Memory] retrieval skipped:', me.message); }
-
-    // ── Competitive Intelligence injection ──
-    var competitiveContext = '';
-    try {
-      var ciResults = await sql`
-        SELECT pillar, gap_analysis FROM competitive_intelligence
-        WHERE event_id = ${evt.id}
-        ORDER BY run_at DESC
-      `;
-      if (ciResults.length > 0) {
-        // Find the best matching pillar for this submission
-        var subTrack = (sub.track || '').toLowerCase();
-        var matchedCI = ciResults.find(function(ci) {
-          var pillar = (ci.pillar || '').toLowerCase();
-          return subTrack.includes(pillar.split(' ')[0]) || pillar.includes(subTrack.split(' ')[0]);
-        }) || ciResults[0];
-
-        if (matchedCI && matchedCI.gap_analysis) {
-          var ga = typeof matchedCI.gap_analysis === 'string' ? JSON.parse(matchedCI.gap_analysis) : matchedCI.gap_analysis;
-          var topics = (ga.topics || []).slice(0, 5);
-          if (topics.length > 0) {
-            competitiveContext = '\n\nCOMPETITIVE LANDSCAPE (' + matchedCI.pillar + ') — use this to score intel_alignment and strategic_value more precisely:\n';
-            topics.forEach(function(t) {
-              competitiveContext += '- ' + t.topic + ': ' + (t.ownershipStatus || 'unknown').toUpperCase() +
-                ' (confidence ' + (t.confidence || 0) + ')' +
-                (t.ownedBy && t.ownedBy.length ? ', owned by: ' + t.ownedBy.join(', ') : '') +
-                (t.entryAngle ? ' — Intel angle: ' + t.entryAngle : '') + '\n';
-            });
-            var whitespace = (ga.whitespaceOpportunities || []).slice(0, 2);
-            if (whitespace.length) {
-              competitiveContext += 'Unclaimed opportunities: ' + whitespace.map(function(w){ return w.cluster; }).join(', ') + '\n';
-            }
-          }
-        }
-      }
-    } catch(ce) { console.log('[Competitive] context skipped:', ce.message); }
-
-    // ── CFP source context ──
-    var cfpContext = '';
-    if (sub.source === 'cfp') {
-      cfpContext = '\n\nNOTE: This is a speaker-submitted CFP proposal (not an internal Intel submission). ' +
-        'The abstract may be rougher than internal content. For delivery_readiness, the speaker IS the content owner — ' +
-        'weight format clarity and specificity of session flow. Score with the understanding that content will be refined ' +
-        'through the Intel review process.';
-    }
-
-    var userPrompt = [
-      'Title: ' + (sub.title || ''),
-      'Abstract: ' + (sub.abstract || ''),
-      'Business Unit: ' + (sub.bu || ''),
-      'Track: ' + (sub.track || ''),
-      'Key Topics: ' + (sub.key_topics || ''),
-      'Featured Products: ' + (sub.featured_products || ''),
-      'Business Challenge: ' + (sub.business_challenge || ''),
-      'Speakers: ' + (sub.speaker_names || 'N/A')
-    ].join('\n');
-    var scorecard = await callClaude(evt.ai_system_prompt + memoryContext + competitiveContext + cfpContext, userPrompt, true);
-    await sql`UPDATE submissions SET ai_score = ${JSON.stringify(scorecard)}, memory_insights = ${JSON.stringify(memoryInsights)} WHERE id = ${id}`;
-    try {
-      var evtForScore = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
-      if (evtForScore.length) notifyScored(sub, evtForScore[0]).catch(function(){});
-    } catch(ne) {}
-    try {
-      var firstVer = await sql`SELECT ai_score FROM submission_versions WHERE submission_id = ${id} ORDER BY version_number ASC LIMIT 1`;
-      if (firstVer.length && firstVer[0].ai_score) {
-        var fs = firstVer[0].ai_score.overall || firstVer[0].ai_score.overall_score || 0;
-        var cs = scorecard.overall || scorecard.overall_score || 0;
-        await sql`UPDATE submissions SET score_delta = ${cs - fs} WHERE id = ${id}`;
-      }
-    } catch(de) {}
-    console.log('[Score] Complete for submission', id);
-    } catch(asyncErr) { console.error('[Score async]', asyncErr.message); }
-    }); // end setImmediate
+    var check = await sql`SELECT id FROM submissions WHERE id = ${id}`;
+    if (!check.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var job = await sql`INSERT INTO ai_jobs (submission_id, job_type, status) VALUES (${id}, 'score', 'pending') RETURNING id`;
+    res.json({ ok: true, job_id: job[0].id, status: 'queued' });
   } catch (err) {
     console.error('[submissions/score]', err.message);
-    // res already sent, can't send again
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -1330,51 +1221,13 @@ app.post('/api/submissions/:id/coach', async function(req, res) {
   try {
     var sql = getDb();
     var id = req.params.id;
-    var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
-    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
-    // Return immediately — do heavy work async to beat Render's 30s timeout
-    res.json({ ok: true, status: 'running', message: 'Coaching started' });
-    setImmediate(async function() { try {
-    var subResult2 = await sql`SELECT * FROM submissions WHERE id = ${id}`;
-    if (!subResult2.length) return;
-    var sub = subResult2[0];;
-    var sub = subResult[0];
-    var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
-    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
-    var evt = evtResult[0];
-    var gate90 = evaluateGate(sub, 'gate_90');
-    var memoryContext = '';
-    try {
-      var coachText = (sub.title||'') + ' ' + (sub.abstract||'') + ' ' + (sub.track||'');
-      var coachEmbed = await generateEmbedding(coachText);
-      var coachMems = await searchMemories(coachEmbed, evt.id, 3);
-      if (coachMems.length > 0) {
-        memoryContext = 'Past event insights:\n';
-        coachMems.forEach(function(m,i){ memoryContext += (i+1)+'. ['+m.category+'] '+m.content+'\n'; });
-      }
-    } catch(me) { console.log('[coach memory]', me.message); }
-    var sp = 'You are a content coaching expert for Intel events. Give specific, actionable coaching to help session owners improve submissions. Be direct. Return ONLY valid JSON.';
-    var up = [];
-    up.push('Event: '+evt.name);
-    up.push('Context: '+(evt.context_profile||'').slice(0,300));
-    up.push('Title: '+(sub.title||''));
-    up.push('Track: '+(sub.track||''));
-    up.push('Abstract: '+(sub.abstract||''));
-    up.push('Key topics: '+(sub.key_topics||''));
-    up.push('Products: '+(sub.featured_products||''));
-    up.push('Demos: '+(sub.demos||''));
-    up.push('Partners: '+(sub.partner_highlights||''));
-    up.push('Gate 90 blocking: '+JSON.stringify(gate90.blocking_fields.map(function(f){return f.label;})));
-    if (memoryContext) up.push(memoryContext);
-    up.push('Return JSON: {"critical_fixes":[{"issue":"","action":""}],"high_impact":[{"opportunity":"","action":"","expected_gain":""}],"quick_wins":[{"change":"","reason":""}],"past_event_examples":[{"lesson":"","application":""}],"overall_coaching_note":""}');
-    var report = await callClaude(sp, up.join('\n'), true);
-    await sql`UPDATE submissions SET coaching_report = ${JSON.stringify(report)} WHERE id = ${id}`;
-    console.log('[Coach] Complete for submission', id);
-    } catch(asyncErr) { console.error('[Coach async]', asyncErr.message); }
-    }); // end setImmediate
-  } catch (err) {
+    var check = await sql`SELECT id FROM submissions WHERE id = ${id}`;
+    if (!check.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var job = await sql`INSERT INTO ai_jobs (submission_id, job_type, status) VALUES (${id}, 'coach', 'pending') RETURNING id`;
+    res.json({ ok: true, job_id: job[0].id, status: 'queued' });
+  } catch(err) {
     console.error('[api/coach]', err.message);
-    // res already sent, can't send again
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -2784,6 +2637,181 @@ app.get('/api/cfp/verify/:token', async function(req, res) {
 });
 
 
+// ─── BACKGROUND AI JOB PROCESSOR ─────────────────────────────────────────────
+// Persistent setInterval loop — runs scoring and coaching jobs from DB queue
+// completely outside of HTTP request lifecycle. Beats Render's request timeout.
+
+async function ensureJobsSchema(sql) {
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS ai_jobs (
+      id SERIAL PRIMARY KEY,
+      submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+      job_type TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      error_msg TEXT
+    )`;
+    console.log('[OK] ai_jobs table');
+  } catch(e) { console.log('[SKIP] ai_jobs:', e.message); }
+}
+
+async function processJobs() {
+  try {
+    var sql = getDb();
+    // Claim a pending job atomically
+    var jobs = await sql`
+      UPDATE ai_jobs SET status = 'running', started_at = NOW()
+      WHERE id = (
+        SELECT id FROM ai_jobs WHERE status = 'pending'
+        ORDER BY created_at ASC LIMIT 1
+      )
+      RETURNING *
+    `;
+    if (!jobs.length) return;
+    var job = jobs[0];
+    console.log('[JobProcessor] Running', job.job_type, 'for submission', job.submission_id);
+
+    try {
+      if (job.job_type === 'score') {
+        await runScoringJob(job.submission_id, sql);
+      } else if (job.job_type === 'coach') {
+        await runCoachingJob(job.submission_id, sql);
+      }
+      await sql`UPDATE ai_jobs SET status = 'done', completed_at = NOW() WHERE id = ${job.id}`;
+      console.log('[JobProcessor] Done:', job.job_type, 'for submission', job.submission_id);
+    } catch(jobErr) {
+      console.error('[JobProcessor] Job failed:', jobErr.message);
+      await sql`UPDATE ai_jobs SET status = 'error', error_msg = ${jobErr.message}, completed_at = NOW() WHERE id = ${job.id}`;
+    }
+  } catch(e) {
+    if (!e.message.includes('no rows')) console.error('[JobProcessor] Error:', e.message);
+  }
+}
+
+async function runScoringJob(id, sql) {
+  var subResult = await sql`
+    SELECT s.id, s.event_id, s.title, s.content_lead, s.bu, s.track,
+      s.format, s.duration, s.abstract, s.key_topics, s.demos,
+      s.featured_products, s.business_challenge, s.partner_highlights,
+      s.new_launches, s.reviewer_notes, s.status, s.ai_score,
+      s.enriched_abstract, s.source, s.created_at,
+      (SELECT string_agg(sp.full_name, ', ' ORDER BY sp.full_name)
+       FROM submission_speakers ss JOIN speakers sp ON sp.id = ss.speaker_id
+       WHERE ss.submission_id = s.id) as speaker_names
+    FROM submissions s WHERE s.id = ${id}
+  `;
+  if (!subResult.length) throw new Error('Submission not found');
+  var sub = subResult[0];
+  var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+  if (!evtResult.length) throw new Error('Event not found');
+  var evt = evtResult[0];
+  if (!evt.ai_system_prompt) throw new Error('No AI system prompt configured');
+
+  var memoryContext = '';
+  var memoryInsights = [];
+  try {
+    var scoringText = (sub.title||'') + ' ' + (sub.abstract||'') + ' ' + (sub.key_topics||'');
+    var scoringEmbedding = await generateEmbedding(scoringText);
+    var relevantMemories = await searchMemories(scoringEmbedding, evt.id, 5);
+    if (relevantMemories.length > 0) {
+      memoryContext = '\n\nPAST EVENT INSIGHTS (factor these into your scoring):\n';
+      relevantMemories.forEach(function(m, idx) {
+        memoryContext += (idx+1) + '. [' + m.category.toUpperCase() + '] ' + m.content + '\n';
+        memoryInsights.push({ id: m.id, category: m.category, content: m.content.slice(0,150) });
+      });
+    }
+  } catch(me) { console.log('[Score Job] Memory skipped:', me.message); }
+
+  var competitiveContext = '';
+  try {
+    var ciResults = await sql`SELECT pillar, gap_analysis FROM competitive_intelligence WHERE event_id = ${evt.id} ORDER BY run_at DESC`;
+    if (ciResults.length > 0) {
+      var subTrack = (sub.track||'').toLowerCase();
+      var matchedCI = ciResults.find(function(ci){ var p=(ci.pillar||'').toLowerCase(); return subTrack.includes(p.split(' ')[0])||p.includes(subTrack.split(' ')[0]); }) || ciResults[0];
+      if (matchedCI && matchedCI.gap_analysis) {
+        var ga = typeof matchedCI.gap_analysis==='string' ? JSON.parse(matchedCI.gap_analysis) : matchedCI.gap_analysis;
+        var topics = (ga.topics||[]).slice(0,5);
+        if (topics.length>0) {
+          competitiveContext = '\n\nCOMPETITIVE LANDSCAPE (' + matchedCI.pillar + '):\n';
+          topics.forEach(function(t){
+            competitiveContext += '- ' + t.topic + ': ' + (t.ownershipStatus||'unknown').toUpperCase() + ' (confidence ' + (t.confidence||0) + ')' + (t.ownedBy&&t.ownedBy.length?', owned by: '+t.ownedBy.join(', '):'') + (t.entryAngle?' — Intel angle: '+t.entryAngle:'') + '\n';
+          });
+        }
+      }
+    }
+  } catch(ce) { console.log('[Score Job] Competitive context skipped:', ce.message); }
+
+  var cfpContext = sub.source==='cfp' ? '\n\nNOTE: Speaker-submitted CFP proposal. Abstract may be rough. Score delivery_readiness with the understanding content will be refined through Intel review.' : '';
+
+  var userPrompt = ['Title: '+(sub.title||''), 'Abstract: '+(sub.abstract||''), 'Business Unit: '+(sub.bu||''), 'Track: '+(sub.track||''), 'Key Topics: '+(sub.key_topics||''), 'Featured Products: '+(sub.featured_products||''), 'Business Challenge: '+(sub.business_challenge||''), 'Speakers: '+(sub.speaker_names||'N/A')].join('\n');
+  var scorecard = await callClaude(evt.ai_system_prompt + memoryContext + competitiveContext + cfpContext, userPrompt, true);
+  await sql`UPDATE submissions SET ai_score = ${JSON.stringify(scorecard)}, memory_insights = ${JSON.stringify(memoryInsights)} WHERE id = ${id}`;
+
+  try { notifyScored(sub, evt).catch(function(){}); } catch(ne) {}
+  try {
+    var firstVer = await sql`SELECT ai_score FROM submission_versions WHERE submission_id = ${id} ORDER BY version_number ASC LIMIT 1`;
+    if (firstVer.length && firstVer[0].ai_score) {
+      var fs = firstVer[0].ai_score.overall || firstVer[0].ai_score.overall_score || 0;
+      var cs = scorecard.overall || scorecard.overall_score || 0;
+      await sql`UPDATE submissions SET score_delta = ${cs - fs} WHERE id = ${id}`;
+    }
+  } catch(de) {}
+}
+
+async function runCoachingJob(id, sql) {
+  var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+  if (!subResult.length) throw new Error('Submission not found');
+  var sub = subResult[0];
+  var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+  if (!evtResult.length) throw new Error('Event not found');
+  var evt = evtResult[0];
+  var gate90 = evaluateGate(sub, 'gate_90');
+
+  var memoryContext = '';
+  try {
+    var coachText = (sub.title||'')+' '+(sub.abstract||'')+' '+(sub.track||'');
+    var coachEmbed = await generateEmbedding(coachText);
+    var coachMems = await searchMemories(coachEmbed, evt.id, 3);
+    if (coachMems.length>0) {
+      memoryContext = 'Past event insights:\n';
+      coachMems.forEach(function(m,i){ memoryContext+=(i+1)+'. ['+m.category+'] '+m.content+'\n'; });
+    }
+  } catch(me) {}
+
+  var sp = 'You are a content coaching expert for Intel events. Give specific, actionable coaching to help session owners improve submissions. Be direct. Return ONLY valid JSON.';
+  var up = [];
+  up.push('Event: '+evt.name);
+  up.push('Context: '+(evt.context_profile||'').slice(0,300));
+  up.push('Title: '+(sub.title||''));
+  up.push('Track: '+(sub.track||''));
+  up.push('Abstract: '+(sub.abstract||''));
+  up.push('Key topics: '+(sub.key_topics||''));
+  up.push('Products: '+(sub.featured_products||''));
+  up.push('Demos: '+(sub.demos||''));
+  up.push('Partners: '+(sub.partner_highlights||''));
+  up.push('Gate 90 blocking: '+JSON.stringify(gate90.blocking_fields.map(function(f){return f.label;})));
+  if (memoryContext) up.push(memoryContext);
+  up.push('Return JSON: {"critical_fixes":[{"issue":"","action":""}],"high_impact":[{"opportunity":"","action":"","expected_gain":""}],"quick_wins":[{"change":"","reason":""}],"past_event_examples":[{"lesson":"","application":""}],"overall_coaching_note":""}');
+  var report = await callClaude(sp, up.join('\n'), true);
+  await sql`UPDATE submissions SET coaching_report = ${JSON.stringify(report)} WHERE id = ${id}`;
+}
+
+// GET job status
+app.get('/api/jobs/:id', async function(req, res) {
+  try {
+    var sql = getDb();
+    var result = await sql`SELECT j.*, s.ai_score, s.coaching_report FROM ai_jobs j LEFT JOIN submissions s ON s.id = j.submission_id WHERE j.id = ${req.params.id}`;
+    if (!result.length) return res.status(404).json({ ok: false, error: 'Job not found' });
+    var j = result[0];
+    res.json({ ok: true, job_id: j.id, submission_id: j.submission_id, job_type: j.job_type, status: j.status, error_msg: j.error_msg, ai_score: j.ai_score, coaching_report: j.coaching_report });
+  } catch(err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
 // ─── PHASE 4: PROGRAM INTELLIGENCE ──────────────────────────────────────────
 
 // GET program health dashboard for an event
@@ -3561,6 +3589,9 @@ ensureSchema()
   })
   .then(function () {
     console.log('[startup] Data seeded, starting server...');
+    setInterval(processJobs, 5000);
+    console.log('[JobProcessor] Started — polling every 5s');
+
     app.listen(PORT, '0.0.0.0', function () {
       console.log('[server] listening on port ' + PORT);
     });
