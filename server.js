@@ -337,6 +337,15 @@ async function ensureSchema() {
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS memory_insights JSONB`; console.log('[OK] memory_insights'); } catch(e) { console.log('[SKIP] memory_insights:', e.message); }
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS version_number INTEGER DEFAULT 1`; console.log('[OK] version_number'); } catch(e) { console.log('[SKIP] version_number:', e.message); }
 
+  // ── PHASE 4.5: Competitive intelligence fields ──────────────────────────
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS competitive_analysis JSONB`; console.log('[OK] competitive_analysis'); } catch(e) { console.log('[SKIP] competitive_analysis:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS title_saturation_score INTEGER DEFAULT 0`; console.log('[OK] title_saturation_score'); } catch(e) { console.log('[SKIP] title_saturation_score:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS reframe_suggestions JSONB`; console.log('[OK] reframe_suggestions'); } catch(e) { console.log('[SKIP] reframe_suggestions:', e.message); }
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS competitive_intelligence (id SERIAL PRIMARY KEY, event_id INTEGER REFERENCES events(id) ON DELETE CASCADE, pillar TEXT, sonar_raw JSONB, gap_analysis JSONB, whitespace_report JSONB, run_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(event_id, pillar))`;
+    console.log('[OK] competitive_intelligence table');
+  } catch(e) { console.log('[SKIP] competitive_intelligence:', e.message); }
+
   // ── PHASE 3: Auth, coaching, portal fields ───────────────────────────────
   try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS slug TEXT`; console.log('[OK] events.slug'); } catch(e) { console.log('[SKIP] events.slug:', e.message); }
   try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS notification_email TEXT`; console.log('[OK] notification_email'); } catch(e) { console.log('[SKIP] notification_email:', e.message); }
@@ -1525,6 +1534,302 @@ app.get('/submit/token/:token', async function(req, res) {
   } catch(err) {
     console.error('[submit portal]', err.message);
     res.status(500).send('<p>Something went wrong. Please try again.</p>');
+  }
+});
+
+
+// ─── PHASE 4.5: COMPETITIVE INTELLIGENCE ─────────────────────────────────────
+
+// ── Perplexity Sonar client (Stage 1) ────────────────────────────────────────
+async function callSonar(pillar, audienceContext) {
+  var PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+  if (!PERPLEXITY_API_KEY) {
+    console.log('[Sonar] No PERPLEXITY_API_KEY — skipping');
+    return null;
+  }
+  var prompt = 'Research the ' + pillar + ' conference and event space for this audience: ' + audienceContext + '. ' +
+    'Focus on government, defense, and enterprise technology events. ' +
+    'Return ONLY valid JSON, no other text: ' +
+    '{"dominantSpeakers":["name — topic they own"],' +
+    '"dominantOrganizations":["org — what they present about"],' +
+    '"saturatedTopics":["topics appearing at every conference in this space"],' +
+    '"emergingTopics":["topics first appearing in last 12 months"],' +
+    '"missingTopics":["audience needs with no speaker representation"],' +
+    '"aiCitations":["who gets cited when AI answers questions about this space"],' +
+    '"recentConferenceAgendas":["conference name — standout session titles"]}';
+  try {
+    var response = await axios.post('https://api.perplexity.ai/chat/completions', {
+      model: 'sonar',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1500
+    }, {
+      headers: {
+        'Authorization': 'Bearer ' + PERPLEXITY_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
+    });
+    var text = response.data.choices[0].message.content;
+    var jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    return null;
+  } catch(e) {
+    console.error('[Sonar] Error:', e.message);
+    return null;
+  }
+}
+
+// ── Stage 2: Gap classification (claude-sonnet-4-6) ───────────────────────────
+async function classifyGaps(sonarData, eventSystemPrompt, submissions, pillar) {
+  var systemPrompt = 'You are a competitive intelligence agent for the events industry, specializing in session topic authority mapping. ' +
+    'Analyze the topic space and classify where authority is owned, contested, or unclaimed.\n\n' +
+    'EVENT CONTEXT:\n' + eventSystemPrompt + '\n\n' +
+    'OWNERSHIP CLASSIFICATION:\n' +
+    'OWNED (confidence 80-100): One or two voices consistently appear as authoritative. New entrants need a proprietary data angle, named framework, or attack a sub-niche.\n' +
+    'CONTESTED (confidence 50-79): Multiple voices, no clear authority. 6-12 month window to claim with consistent output.\n' +
+    'UNCLAIMED (confidence 0-49): Real audience demand, no authoritative voice. First mover with strong POV wins.\n\n' +
+    'Evaluate four ownership dimensions: format ownership, recency gap, speaker authority map, AI citation signal.\n' +
+    'Return ONLY valid JSON.';
+
+  var submissionTopics = submissions.map(function(s) {
+    return { title: s.title, abstract: (s.abstract || '').slice(0, 200), track: s.track };
+  });
+
+  var userPrompt = 'Pillar: ' + pillar + '\n\n' +
+    'Live competitive research:\n' + JSON.stringify(sonarData) + '\n\n' +
+    'Current Intel submissions for this pillar:\n' + JSON.stringify(submissionTopics) + '\n\n' +
+    'Return JSON:\n' +
+    '{"marketSnapshot":{"totalTopicsAnalyzed":0,"owned":0,"contested":0,"unclaimed":0,"highUrgencyOpportunities":0},' +
+    '"topics":[{"topic":"","ownershipStatus":"owned|contested|unclaimed","confidence":0,' +
+    '"ownedBy":[],"formatGaps":[],"recencyGap":false,"recencyNote":"",' +
+    '"aiCitationOwner":"","whyUnclaimed":"","entryAngle":"","suggestedSessionTitle":"","urgency":"high|medium|low","urgencyReason":""}],' +
+    '"whitespaceOpportunities":[{"cluster":"","sessionCount":0,"estimatedClaimWindow":"","ownItStrategy":""}],' +
+    '"competitorProfiles":[{"name":"","topicsOwned":[],"weaknesses":[],"attackAngle":""}]}';
+
+  return await callClaude(systemPrompt, userPrompt, true);
+}
+
+// ── Stage 3: Per-submission reframe (claude-haiku-4-5-20251001) ───────────────
+async function reframeSubmission(submission, gapAnalysis, pillar) {
+  try {
+    var response = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 800,
+      system: 'You are a competitive intelligence specialist for Intel events. Analyze session titles for saturation and suggest unclaimed angles. Return ONLY valid JSON.',
+      messages: [{
+        role: 'user',
+        content: 'Submission: ' + submission.title + '\nAbstract: ' + (submission.abstract || '').slice(0, 300) + '\nPillar: ' + pillar + '\n\n' +
+          'Saturated topics in this space: ' + JSON.stringify((gapAnalysis.topics || []).filter(function(t){ return t.ownershipStatus === 'owned'; }).map(function(t){ return t.topic; }).slice(0,5)) + '\n' +
+          'Unclaimed opportunities: ' + JSON.stringify((gapAnalysis.whitespaceOpportunities || []).slice(0,3)) + '\n\n' +
+          'Return JSON: {"title_saturation_score":0,"saturation_reason":"","reframe_suggestions":[{"title":"","angle":"","ownership_potential":"high|medium|low"}],"named_framework_suggestion":"","ai_citation_gap":""}'
+      }]
+    }, {
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      timeout: 20000
+    });
+    var text = response.data.content[0].text;
+    var jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    return null;
+  } catch(e) {
+    console.error('[Haiku reframe] Error:', e.message);
+    return null;
+  }
+}
+
+// ── Schema additions ──────────────────────────────────────────────────────────
+// Added in ensureSchema via ALTER TABLE — see server startup
+
+// ── API Routes ────────────────────────────────────────────────────────────────
+
+// POST run full 3-stage competitive intelligence pipeline for an event
+app.post('/api/events/:id/competitive/run', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${eventId}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+
+    if (!evt.ai_system_prompt) return res.status(400).json({ ok: false, error: 'Event has no AI system prompt. Generate an event profile first.' });
+
+    // Extract content pillars from ai_system_prompt
+    var pillars = [];
+    var pillarMatch = evt.ai_system_prompt.match(/CONTENT PILLARS[:\s]+([^\n]+)/i);
+    if (pillarMatch) {
+      pillars = pillarMatch[1].split(/[|,]/).map(function(p){ return p.trim(); }).filter(Boolean);
+    }
+    if (pillars.length === 0) pillars = ['Agentic AI', 'Data Center', 'Edge Computing', 'Commercial Client'];
+
+    // Extract audience context
+    var audienceMatch = evt.ai_system_prompt.match(/PRIMARY AUDIENCE[:\s]+([^\n]+)/i);
+    var audienceContext = audienceMatch ? audienceMatch[1] : 'government and defense technology leaders';
+
+    res.json({ ok: true, message: 'Pipeline started', pillars: pillars, status: 'running' });
+
+    // Run pipeline async (don't block the response)
+    setImmediate(async function() {
+      try {
+        var allResults = {};
+
+        for (var pi = 0; pi < pillars.length; pi++) {
+          var pillar = pillars[pi];
+          console.log('[Competitive] Stage 1: Sonar research for pillar:', pillar);
+
+          // Stage 1: Perplexity Sonar
+          var sonarData = await callSonar(pillar, audienceContext);
+          if (!sonarData) {
+            sonarData = { dominantSpeakers: [], dominantOrganizations: [], saturatedTopics: [], emergingTopics: [], missingTopics: [], aiCitations: [], recentConferenceAgendas: [] };
+          }
+
+          // Get submissions for this pillar
+          var pillarSubs = await sql`SELECT id, title, abstract, track, bu FROM submissions WHERE event_id = ${eventId} AND track ILIKE ${'%' + pillar.split(' ')[0] + '%'}`;
+
+          console.log('[Competitive] Stage 2: Gap classification for pillar:', pillar, '(' + pillarSubs.length + ' submissions)');
+
+          // Stage 2: Claude Sonnet gap classification
+          var gapAnalysis = null;
+          try {
+            gapAnalysis = await classifyGaps(sonarData, evt.ai_system_prompt, pillarSubs, pillar);
+          } catch(ge) {
+            console.error('[Competitive] Stage 2 error:', ge.message);
+            gapAnalysis = { marketSnapshot: {}, topics: [], whitespaceOpportunities: [], competitorProfiles: [] };
+          }
+
+          // Stage 3: Per-submission Haiku reframe
+          console.log('[Competitive] Stage 3: Haiku reframes for', pillarSubs.length, 'submissions');
+          for (var si = 0; si < pillarSubs.length; si++) {
+            var sub = pillarSubs[si];
+            var reframe = await reframeSubmission(sub, gapAnalysis || {}, pillar);
+            if (reframe) {
+              await sql`
+                UPDATE submissions SET
+                  competitive_analysis = ${JSON.stringify({ pillar: pillar, gap_analysis_summary: (gapAnalysis || {}).marketSnapshot, reframe: reframe })},
+                  title_saturation_score = ${reframe.title_saturation_score || 0},
+                  reframe_suggestions = ${JSON.stringify(reframe.reframe_suggestions || [])}
+                WHERE id = ${sub.id}
+              `;
+            }
+          }
+
+          allResults[pillar] = {
+            sonar_raw: sonarData,
+            gap_analysis: gapAnalysis,
+            submissions_analyzed: pillarSubs.length
+          };
+
+          // Store in competitive_intelligence table
+          await sql`
+            INSERT INTO competitive_intelligence (event_id, pillar, sonar_raw, gap_analysis, whitespace_report)
+            VALUES (${eventId}, ${pillar}, ${JSON.stringify(sonarData)}, ${JSON.stringify(gapAnalysis)}, ${JSON.stringify((gapAnalysis || {}).whitespaceOpportunities || [])})
+            ON CONFLICT (event_id, pillar) DO UPDATE SET
+              sonar_raw = EXCLUDED.sonar_raw,
+              gap_analysis = EXCLUDED.gap_analysis,
+              whitespace_report = EXCLUDED.whitespace_report,
+              run_at = NOW()
+          `;
+        }
+
+        console.log('[Competitive] Pipeline complete for event', eventId);
+      } catch(pipeErr) {
+        console.error('[Competitive] Pipeline error:', pipeErr.message);
+      }
+    });
+
+  } catch(err) {
+    console.error('[api/competitive/run]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET latest competitive intelligence results for an event
+app.get('/api/events/:id/competitive', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+
+    var results = await sql`
+      SELECT * FROM competitive_intelligence
+      WHERE event_id = ${eventId}
+      ORDER BY run_at DESC
+    `;
+
+    var subsWithCompetitive = await sql`
+      SELECT id, title, track, bu, title_saturation_score, reframe_suggestions, competitive_analysis
+      FROM submissions
+      WHERE event_id = ${eventId} AND competitive_analysis IS NOT NULL
+      ORDER BY title_saturation_score DESC
+    `;
+
+    // Build whitespace report across all pillars
+    var allWhitespace = [];
+    results.forEach(function(r) {
+      var wr = r.whitespace_report;
+      if (typeof wr === 'string') { try { wr = JSON.parse(wr); } catch(e) { wr = []; } }
+      if (Array.isArray(wr)) {
+        wr.forEach(function(w) { allWhitespace.push(Object.assign({}, w, { pillar: r.pillar })); });
+      }
+    });
+
+    res.json({
+      ok: true,
+      pillars: results,
+      submissions: subsWithCompetitive,
+      whitespace_report: allWhitespace,
+      last_run: results.length > 0 ? results[0].run_at : null
+    });
+  } catch(err) {
+    console.error('[api/competitive GET]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST run Stage 3 reframe on a single submission
+app.post('/api/submissions/:id/competitive/reframe', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+
+    var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+    if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    var sub = subResult[0];
+
+    // Get latest gap analysis for this pillar
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+
+    var ciResult = await sql`
+      SELECT * FROM competitive_intelligence
+      WHERE event_id = ${sub.event_id}
+      ORDER BY run_at DESC
+      LIMIT 5
+    `;
+
+    // Find matching pillar
+    var pillar = sub.track || 'General';
+    var matchingCI = ciResult.find(function(ci){ return ci.pillar && pillar.toLowerCase().includes(ci.pillar.split(' ')[0].toLowerCase()); });
+    var gapAnalysis = matchingCI ? (typeof matchingCI.gap_analysis === 'string' ? JSON.parse(matchingCI.gap_analysis) : matchingCI.gap_analysis) : {};
+
+    var reframe = await reframeSubmission(sub, gapAnalysis || {}, pillar);
+    if (!reframe) return res.status(500).json({ ok: false, error: 'Reframe generation failed' });
+
+    await sql`
+      UPDATE submissions SET
+        competitive_analysis = ${JSON.stringify({ pillar: pillar, reframe: reframe })},
+        title_saturation_score = ${reframe.title_saturation_score || 0},
+        reframe_suggestions = ${JSON.stringify(reframe.reframe_suggestions || [])}
+      WHERE id = ${id}
+    `;
+
+    res.json({ ok: true, reframe: reframe });
+  } catch(err) {
+    console.error('[api/competitive/reframe]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
