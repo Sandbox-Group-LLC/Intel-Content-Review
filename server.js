@@ -3,6 +3,7 @@ var path = require('path');
 var axios = require('axios');
 var { neon } = require('@neondatabase/serverless');
 var { Resend } = require('resend');
+var AdmZip = require('adm-zip');
 var crypto = require('crypto');
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY); }
@@ -1855,6 +1856,565 @@ app.post('/api/submissions/:id/competitive/reframe', async function(req, res) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+
+// ─── v2.1 PHASE 2: CFP SPEAKER PORTAL ────────────────────────────────────────
+
+// ── PPTX field parser ─────────────────────────────────────────────────────────
+function parseCFPPptx(buffer) {
+  try {
+    var zip = new AdmZip(buffer);
+    var slideEntry = zip.getEntry('ppt/slides/slide1.xml');
+    if (!slideEntry) return null;
+    var xml = slideEntry.getData().toString('utf-8');
+
+    // Extract all text nodes from the XML
+    var texts = [];
+    var matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
+    matches.forEach(function(m) {
+      var text = m.replace(/<[^>]+>/g, '').trim();
+      if (text) texts.push(text);
+    });
+
+    // Map to fields based on the Intel one-pager structure
+    var fields = {
+      title: '', abstract: '', format: '', duration: '45 min',
+      intel_speakers: '', partner_walkons: '', key_topics: '',
+      partner_highlights: '', demos: '', new_launches: '', featured_products: ''
+    };
+
+    var fullText = texts.join(' | ');
+
+    // Extract title — first substantive text that isn't a label
+    var labels = ['TITLE', 'Content Lead', 'Content Format', 'Duration', 'Intel Speakers',
+      'Partner', 'Track', 'Abstract', 'SESSION FLOW', 'Key Topics', 'Demos', 'Featured',
+      'New Launches', 'Notes', 'Provided by', 'TBD', 'Tue,', 'Date:', 'Time:', 'Location:',
+      'Furniture', 'Rehearsal', 'Intro', 'Section', 'Wrap-Up'];
+
+    var skipPattern = new RegExp('^(' + labels.map(function(l){ return l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|') + ')', 'i');
+
+    for (var ti = 0; ti < texts.length; ti++) {
+      var t = texts[ti].trim();
+      if (t.length > 5 && !skipPattern.test(t) && t !== 'TBD' && !t.startsWith(':')) {
+        fields.title = t;
+        break;
+      }
+    }
+
+    // Extract abstract — look for text after "Abstract:" label
+    var absIdx = texts.findIndex(function(t){ return /abstract/i.test(t); });
+    if (absIdx >= 0) {
+      var absParts = [];
+      for (var ai = absIdx + 1; ai < Math.min(absIdx + 5, texts.length); ai++) {
+        var at = texts[ai].trim();
+        if (at && at !== 'TBD' && !/^(SESSION FLOW|Key Topics|Partner|Demos|Featured|New Launch)/i.test(at) && !at.startsWith('Provided')) {
+          absParts.push(at);
+        }
+      }
+      if (absParts.length) fields.abstract = absParts.join(' ');
+    }
+
+    // Extract format
+    var formatMatch = fullText.match(/Format:\s*(Panel|Fireside Chat|Roundtable|Presentation)/i);
+    if (formatMatch) fields.format = formatMatch[1];
+
+    // Extract duration
+    var durMatch = fullText.match(/(\d+)\s*min/i);
+    if (durMatch) fields.duration = durMatch[1] + ' min';
+
+    // Extract Intel speakers
+    var spIdx = texts.findIndex(function(t){ return /Intel Speakers/i.test(t); });
+    if (spIdx >= 0 && texts[spIdx + 1]) {
+      var spText = texts[spIdx + 1].trim();
+      if (spText && spText !== 'TBD' && !spText.startsWith('Provided')) fields.intel_speakers = spText;
+    }
+
+    // Extract partner walk-ons
+    var poIdx = texts.findIndex(function(t){ return /Partner\/Customer Walk/i.test(t); });
+    if (poIdx >= 0 && texts[poIdx + 1]) {
+      var poText = texts[poIdx + 1].trim();
+      if (poText && poText !== 'TBD' && !poText.startsWith('Provided')) fields.partner_walkons = poText;
+    }
+
+    // Extract demos
+    var demoIdx = texts.findIndex(function(t){ return /Demos or Videos/i.test(t); });
+    if (demoIdx >= 0 && texts[demoIdx + 1]) {
+      var demoText = texts[demoIdx + 1].trim();
+      if (demoText && demoText !== 'TBD') fields.demos = demoText;
+    }
+
+    // Extract featured products
+    var prodIdx = texts.findIndex(function(t){ return /Featured Intel Products/i.test(t); });
+    if (prodIdx >= 0 && texts[prodIdx + 1]) {
+      var prodText = texts[prodIdx + 1].trim();
+      if (prodText && prodText !== 'TBD') fields.featured_products = prodText;
+    }
+
+    // Extract new launches
+    var launchIdx = texts.findIndex(function(t){ return /New Launches/i.test(t); });
+    if (launchIdx >= 0 && texts[launchIdx + 1]) {
+      var launchText = texts[launchIdx + 1].trim();
+      if (launchText && launchText !== 'TBD') fields.new_launches = launchText;
+    }
+
+    // Extract partner highlights
+    var partIdx = texts.findIndex(function(t){ return /Partner or Customer Highlights/i.test(t); });
+    if (partIdx >= 0 && texts[partIdx + 1]) {
+      var partText = texts[partIdx + 1].trim();
+      if (partText && partText !== 'TBD') fields.partner_highlights = partText;
+    }
+
+    // Extract key topics — collect non-label text after KEY TOPICS header
+    var ktIdx = texts.findIndex(function(t){ return /Key Topics/i.test(t); });
+    if (ktIdx >= 0) {
+      var ktParts = [];
+      for (var ki = ktIdx + 1; ki < Math.min(ktIdx + 8, texts.length); ki++) {
+        var kt = texts[ki].trim();
+        if (kt && kt !== 'TBD' && !kt.startsWith('Provided') && !/^(Partner|Demos|Featured|New Launch|SESSION)/i.test(kt)) {
+          ktParts.push(kt);
+        }
+      }
+      if (ktParts.length) fields.key_topics = ktParts.join(', ');
+    }
+
+    return { fields: fields, raw_texts: texts.slice(0, 30) };
+  } catch(e) {
+    console.error('[parseCFPPptx] Error:', e.message);
+    return null;
+  }
+}
+
+// ── Confirmation email ─────────────────────────────────────────────────────────
+async function sendCFPConfirmation(invite, evt, submission) {
+  var email = invite.email;
+  var name = invite.name || 'there';
+  await sendEmail(email,
+    'Session received — ' + evt.name,
+    '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">' +
+    '<div style="background:#000864;padding:20px 24px"><span style="color:#fff;font-weight:700;font-size:18px">' + escHtmlServer(evt.name) + '</span></div>' +
+    '<div style="padding:32px 24px;background:#fff">' +
+      '<p style="margin:0 0 12px">Hi ' + escHtmlServer(name) + ',</p>' +
+      '<h2 style="color:#000864;font-size:20px;margin:0 0 12px">&#10003; Session Received</h2>' +
+      '<p style="color:#444;margin:0 0 8px">We\'ve received your session proposal:</p>' +
+      '<p style="color:#000864;font-weight:700;font-size:16px;margin:0 0 16px;padding:12px;background:#EEF6FB">' + escHtmlServer(submission.title || 'Your Submission') + '</p>' +
+      '<p style="color:#444;margin:0 0 16px">Our content team will review it and you\'ll hear back about next steps. You can return to your portal at any time using your original invitation link to check status or make updates.</p>' +
+      '<p style="margin:0;font-size:12px;color:#888">Questions? Reply to this email.</p>' +
+    '</div>' +
+    '<div style="background:#EAEAEA;padding:12px 24px;font-size:11px;color:#666">' + escHtmlServer(evt.name) + ' &mdash; Intel Content Review</div>' +
+    '</div>'
+  );
+}
+
+// ── CFP Portal page route ──────────────────────────────────────────────────────
+app.get('/cfp/:slug/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+
+    // Verify token
+    var result = await sql`SELECT i.*, e.name as event_name, e.id as event_id, e.slug as event_slug, e.event_date, e.venue, c.status as cfp_status, c.deadline, c.welcome_heading, c.welcome_body, s.id as sub_id, s.title as sub_title, s.abstract as sub_abstract, s.status as sub_status, s.ai_score as sub_score, s.coaching_report as sub_coaching FROM cfp_invitations i JOIN events e ON e.id = i.event_id LEFT JOIN cfp_config c ON c.event_id = i.event_id LEFT JOIN submissions s ON s.id = i.submission_id WHERE i.token = ${token}`;
+
+    if (!result.length) {
+      return res.send(buildCFPErrorPage('This invitation link is invalid or has expired. Please contact your event coordinator.'));
+    }
+
+    var inv = result[0];
+    if (!inv.opened_at) {
+      await sql`UPDATE cfp_invitations SET opened_at = NOW() WHERE token = ${token}`;
+    }
+
+    res.send(buildCFPPortalPage(inv, token));
+  } catch(err) {
+    console.error('[cfp portal]', err.message);
+    res.send(buildCFPErrorPage('Something went wrong. Please try again or contact your event coordinator.'));
+  }
+});
+
+// ── Submit via form ────────────────────────────────────────────────────────────
+app.post('/api/cfp/:token/submit', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    var b = req.body;
+
+    var invResult = await sql`SELECT * FROM cfp_invitations WHERE token = ${token}`;
+    if (!invResult.length) return res.status(401).json({ ok: false, error: 'Invalid token' });
+    var inv = invResult[0];
+
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${inv.event_id}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+
+    if (!b.title || !b.title.trim()) return res.status(400).json({ ok: false, error: 'Session title is required' });
+    if (!b.abstract || !b.abstract.trim()) return res.status(400).json({ ok: false, error: 'Abstract is required' });
+
+    var sessionFlow = null;
+    try {
+      sessionFlow = JSON.stringify({
+        intro: { duration: '5 min', topics: b.flow_intro || '' },
+        section1: { duration: b.flow_s1_dur || '10 min', topics: b.flow_s1 || '' },
+        section2: { duration: b.flow_s2_dur || '15 min', topics: b.flow_s2 || '' },
+        section3: { duration: b.flow_s3_dur || '10 min', topics: b.flow_s3 || '' },
+        wrapup: { duration: b.flow_wrap_dur || '5 min', topics: b.flow_wrap || '' }
+      });
+    } catch(e) {}
+
+    var subId = inv.submission_id;
+    if (subId) {
+      // Update existing
+      await sql`UPDATE submissions SET title=${b.title}, abstract=${b.abstract}, content_lead=${inv.name||inv.email}, format=${b.format||null}, duration=${b.duration||null}, intel_speakers=${b.intel_speakers||null}, partner_walkons=${b.partner_walkons||null}, key_topics=${b.key_topics||null}, partner_highlights=${b.partner_highlights||null}, demos=${b.demos||null}, new_launches=${b.new_launches||null}, featured_products=${b.featured_products||null}, session_flow=${sessionFlow}, status='submitted', version_number=COALESCE(version_number,1)+1 WHERE id=${subId}`;
+    } else {
+      // Create new
+      var newSub = await sql`INSERT INTO submissions (event_id, title, abstract, content_lead, format, duration, intel_speakers, partner_walkons, key_topics, partner_highlights, demos, new_launches, featured_products, session_flow, status, source) VALUES (${inv.event_id}, ${b.title}, ${b.abstract}, ${inv.name||inv.email}, ${b.format||null}, ${b.duration||null}, ${b.intel_speakers||null}, ${b.partner_walkons||null}, ${b.key_topics||null}, ${b.partner_highlights||null}, ${b.demos||null}, ${b.new_launches||null}, ${b.featured_products||null}, ${sessionFlow}, 'submitted', 'cfp') RETURNING id`;
+      subId = newSub[0].id;
+      await sql`UPDATE cfp_invitations SET submission_id=${subId}, submitted_at=NOW() WHERE token=${token}`;
+    }
+
+    var subForEmail = { title: b.title };
+    sendCFPConfirmation(inv, evt, subForEmail).catch(function(){});
+
+    // Notify reviewer
+    var cfpCfg = await sql`SELECT * FROM cfp_config WHERE event_id = ${inv.event_id}`;
+    var notifyEmail = cfpCfg.length && cfpCfg[0].reply_to_email ? cfpCfg[0].reply_to_email : null;
+    if (notifyEmail) {
+      sendEmail(notifyEmail, (inv.name||inv.email) + ' submitted a session — ' + evt.name,
+        '<div style="font-family:Arial,sans-serif;max-width:600px"><h2 style="color:#000864">New CFP Submission</h2>' +
+        '<p><strong>' + escHtmlServer(inv.name||inv.email) + '</strong> submitted: <strong>' + escHtmlServer(b.title) + '</strong></p>' +
+        '<p>Log in to Intel Content Review to score and review.</p></div>'
+      ).catch(function(){});
+    }
+
+    res.json({ ok: true, submission_id: subId });
+  } catch(err) {
+    console.error('[cfp/submit]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Submit via PPTX upload ─────────────────────────────────────────────────────
+app.post('/api/cfp/:token/upload', multerUpload.single('pptx'), async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    if (!req.file) return res.status(400).json({ ok: false, error: 'No file uploaded' });
+
+    var invResult = await sql`SELECT * FROM cfp_invitations WHERE token = ${token}`;
+    if (!invResult.length) return res.status(401).json({ ok: false, error: 'Invalid token' });
+    var inv = invResult[0];
+
+    // Parse the PPTX
+    var parsed = parseCFPPptx(req.file.buffer);
+    var fields = parsed ? parsed.fields : {};
+
+    res.json({
+      ok: true,
+      parsed: fields,
+      filename: req.file.originalname,
+      parse_success: parsed !== null,
+      message: parsed ? 'Fields extracted — please review and confirm before submitting.' : 'Could not auto-parse this file. Please fill in the form manually.'
+    });
+  } catch(err) {
+    console.error('[cfp/upload]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── CFP Portal HTML builder ────────────────────────────────────────────────────
+function buildCFPErrorPage(msg) {
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Intel Content Review</title>' +
+    '<style>body{font-family:Arial,sans-serif;background:#EAEAEA;margin:0}' +
+    'header{background:#000864;padding:16px 24px}<span{color:#fff;font-weight:700;font-size:18px}' +
+    '.container{max-width:600px;margin:48px auto;padding:0 16px}' +
+    '.card{background:#fff;border:1px solid #EAEAEA;padding:32px;text-align:center}' +
+    '</style></head><body>' +
+    '<header><span style="color:#fff;font-weight:700;font-size:18px">Intel Content Review</span></header>' +
+    '<div class="container"><div class="card">' +
+    '<div style="font-size:32px;margin-bottom:16px">&#128274;</div>' +
+    '<h2 style="color:#CC0000;margin:0 0 12px">Link Unavailable</h2>' +
+    '<p style="color:#666">' + escHtmlServer(msg) + '</p>' +
+    '</div></div></body></html>';
+}
+
+function buildCFPPortalPage(inv, token) {
+  var hasSubmission = !!(inv.sub_id);
+  var eventName = inv.event_name || 'Intel Event';
+  var speakerName = inv.name || inv.email || 'Speaker';
+  var deadline = inv.deadline ? 'Submission deadline: ' + inv.deadline : '';
+
+  var css = [
+    '@font-face{font-family:IntelOneDisplay;font-weight:300;src:url("/api/assets/intelone-display-light.woff") format("woff")}',
+    '@font-face{font-family:IntelOneDisplay;font-weight:400;src:url("/api/assets/intelone-display-regular.woff") format("woff")}',
+    '@font-face{font-family:IntelOneDisplay;font-weight:700;src:url("/api/assets/intelone-display-bold.woff") format("woff")}',
+    '*{box-sizing:border-box;border-radius:0;margin:0;padding:0}',
+    'body{font-family:IntelOneDisplay,Arial,sans-serif;background:#EAEAEA;color:#2E2F2F}',
+    'header{background:#000864;padding:16px 24px;display:flex;align-items:center;gap:16px}',
+    'header span{color:#fff;font-weight:700;font-size:18px}',
+    '.container{max-width:860px;margin:24px auto;padding:0 16px}',
+    '.card{background:#fff;border:1px solid #EAEAEA;padding:24px;margin-bottom:16px}',
+    'h2{font-size:20px;font-weight:700;color:#000864;margin-bottom:16px}',
+    'h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;color:#2E2F2F}',
+    '.section-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;margin-bottom:4px}',
+    'label{font-size:12px;font-weight:700;display:block;margin-bottom:4px}',
+    'input,textarea,select{width:100%;border:1px solid #2E2F2F;padding:10px;font-family:inherit;font-size:14px;background:#fff;margin-bottom:12px}',
+    'textarea{resize:vertical}',
+    '.btn-primary{background:#00AAE8;color:#fff;border:none;padding:12px 28px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer}',
+    '.btn-secondary{background:#fff;color:#2E2F2F;border:1px solid #2E2F2F;padding:10px 20px;font-family:inherit;font-size:13px;cursor:pointer}',
+    '.tab{padding:10px 20px;border:1px solid #EAEAEA;cursor:pointer;font-size:13px;font-weight:700;background:#fff;color:#666}',
+    '.tab.active{background:#000864;color:#fff;border-color:#000864}',
+    '.tab-panel{display:none}.tab-panel.active{display:block}',
+    '.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
+    '.flow-row{display:grid;grid-template-columns:80px 1fr;gap:8px;margin-bottom:8px}',
+    '.badge-cfp{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;color:#fff}',
+    '.score-high{background:#007A3D}.score-mid{background:#B8860B}.score-low{background:#CC0000}.score-na{background:#6B6B6B}',
+    '.alert-info{background:#EEF6FB;border:1px solid #00AAE8;padding:12px;margin-bottom:12px;font-size:13px}',
+    '.alert-success{background:#F0FAF5;border:1px solid #007A3D;padding:12px;margin-bottom:12px;font-size:13px}',
+    '.alert-err{background:#FFF0F0;border:1px solid #CC0000;padding:12px;margin-bottom:12px;font-size:13px}',
+    '.drop-zone{border:2px dashed #EAEAEA;padding:40px;text-align:center;cursor:pointer;transition:border-color .2s}',
+    '.drop-zone.dragover{border-color:#00AAE8;background:#EEF6FB}',
+    '#upload-msg{margin-top:12px;font-size:13px}',
+    '#msg{margin-top:12px;font-size:13px;font-weight:700}'
+  ].join('\n');
+
+  // Build the status section for returning speakers
+  var statusHtml = '';
+  if (hasSubmission) {
+    var score = inv.sub_score ? (typeof inv.sub_score === 'string' ? JSON.parse(inv.sub_score) : inv.sub_score) : null;
+    var overall = score ? (score.overall || score.overall_score || null) : null;
+    var scoreCls = overall === null ? 'score-na' : overall >= 80 ? 'score-high' : overall >= 60 ? 'score-mid' : 'score-low';
+    var statusLabels = { submitted:'Under Review', under_review:'Under Review', approved:'Accepted', declined:'Not Selected', needs_revision:'Revision Requested' };
+    var statusColors = { submitted:'#B8860B', under_review:'#B8860B', approved:'#007A3D', declined:'#CC0000', needs_revision:'#CC0000' };
+    var st = inv.sub_status || 'submitted';
+    statusHtml = '<div class="card" style="border-left:4px solid ' + (statusColors[st]||'#666') + '">' +
+      '<h2>Your Submission</h2>' +
+      '<div style="font-size:14px;font-weight:700;color:#000864;margin-bottom:8px">' + escHtmlServer(inv.sub_title||'') + '</div>' +
+      '<div style="display:flex;gap:16px;align-items:center;margin-bottom:4px">' +
+        '<span>Status: <strong style="color:' + (statusColors[st]||'#666') + '">' + (statusLabels[st]||st) + '</strong></span>' +
+        (overall !== null ? '<span>AI Score: <span class="badge-cfp ' + scoreCls + '">' + overall + '/100</span></span>' : '') +
+      '</div>' +
+      '<p style="font-size:13px;color:#666;margin-top:8px">You can update your submission below. Changes will notify our content team.</p>' +
+    '</div>';
+
+    // Coaching report if available
+    if (inv.sub_coaching) {
+      var coaching = typeof inv.sub_coaching === 'string' ? JSON.parse(inv.sub_coaching) : inv.sub_coaching;
+      if (coaching && coaching.overall_coaching_note) {
+        statusHtml += '<div class="card"><h3>Content Feedback</h3>' +
+          '<div class="alert-info">' + escHtmlServer(coaching.overall_coaching_note) + '</div>';
+        if (coaching.quick_wins && coaching.quick_wins.length) {
+          statusHtml += '<div style="font-size:12px;font-weight:700;color:#007A3D;margin-bottom:8px">QUICK WINS</div>';
+          coaching.quick_wins.forEach(function(q) {
+            statusHtml += '<div style="padding:8px;background:#F0FAF5;border-left:3px solid #007A3D;margin-bottom:6px;font-size:13px"><strong>' + escHtmlServer(q.change||'') + '</strong><br>' + escHtmlServer(q.reason||'') + '</div>';
+          });
+        }
+        statusHtml += '</div>';
+      }
+    }
+  }
+
+  // Pre-fill values from existing submission
+  var pre = {
+    title: inv.sub_title || '',
+    abstract: inv.sub_abstract || ''
+  };
+
+  var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + escHtmlServer(eventName) + ' &mdash; Session Submission</title>' +
+    '<style>' + css + '</style></head><body>' +
+    '<header><img src="/api/assets/Logo.png" alt="Intel" style="height:28px"><span>' + escHtmlServer(eventName) + ' &mdash; Session Submission</span></header>' +
+    '<div class="container">';
+
+  // Welcome card
+  html += '<div class="card">' +
+    '<h2>Hi ' + escHtmlServer(speakerName) + ' &#128075;</h2>' +
+    '<p style="font-size:14px;color:#444;margin-bottom:8px">' + (hasSubmission ? 'Review and update your submission below.' : 'Submit your session proposal for <strong>' + escHtmlServer(eventName) + '</strong> using the form below, or upload your completed one-page template.') + '</p>' +
+    (deadline ? '<p style="font-size:13px;color:#CC0000;font-weight:700">' + escHtmlServer(deadline) + '</p>' : '') +
+  '</div>';
+
+  html += statusHtml;
+
+  // Tabs
+  html += '<div class="card">' +
+    '<div style="display:flex;gap:0;margin-bottom:20px">' +
+      '<button class="tab active" id="tab-form" onclick="switchTab(\'form\')">&#9998; Fill Out Form</button>' +
+      '<button class="tab" id="tab-upload" onclick="switchTab(\'upload\')">&#128196; Upload One-Pager</button>' +
+    '</div>';
+
+  // Form tab
+  html += '<div class="tab-panel active" id="panel-form">' +
+    '<h3>Session Details</h3>' +
+    '<label>Session Title <span style="color:#CC0000">*</span></label>' +
+    '<input id="f-title" value="' + escHtmlServer(pre.title) + '" placeholder="A specific, compelling title for your session" maxlength="150">' +
+
+    '<div class="field-row">' +
+      '<div><label>Session Format</label>' +
+        '<select id="f-format">' +
+          '<option value="">Select format</option>' +
+          '<option value="Presentation">Presentation</option>' +
+          '<option value="Panel">Panel</option>' +
+          '<option value="Fireside Chat">Fireside Chat</option>' +
+          '<option value="Roundtable">Roundtable</option>' +
+        '</select></div>' +
+      '<div><label>Duration</label>' +
+        '<select id="f-duration">' +
+          '<option value="45 min">45 minutes</option>' +
+          '<option value="30 min">30 minutes</option>' +
+          '<option value="60 min">60 minutes</option>' +
+          '<option value="90 min">90 minutes</option>' +
+        '</select></div>' +
+    '</div>' +
+
+    '<label>Abstract <span style="color:#CC0000">*</span></label>' +
+    '<textarea id="f-abstract" rows="5" placeholder="A clear, compelling summary of your session. What will attendees learn? Why does this matter now?">' + escHtmlServer(pre.abstract) + '</textarea>' +
+
+    '<div class="field-row">' +
+      '<div><label>Intel Speakers</label><input id="f-intel-speakers" placeholder="Names of Intel presenters"></div>' +
+      '<div><label>Partner / Customer Walk-Ons</label><input id="f-partner-walkons" placeholder="Names of external co-presenters"></div>' +
+    '</div>' +
+
+    '<h3 style="margin-top:4px">Session Flow</h3>' +
+    '<div style="font-size:12px;color:#666;margin-bottom:10px">Outline what you\'ll cover in each segment.</div>' +
+    '<div class="flow-row"><div style="font-size:12px;font-weight:700;padding-top:10px">Intro (5 min)</div><textarea id="f-flow-intro" rows="2" placeholder="Hook, framing, why this matters"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 1</div><input id="f-s1-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s1" rows="2" placeholder="Main topic or argument"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 2</div><input id="f-s2-dur" placeholder="15 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s2" rows="2" placeholder="Deeper dive, case study, or demo"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 3</div><input id="f-s3-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s3" rows="2" placeholder="Implications, proof points, Q&A setup"></textarea></div>' +
+    '<div class="flow-row"><div style="font-size:12px;font-weight:700;padding-top:10px">Wrap-Up</div><textarea id="f-flow-wrap" rows="2" placeholder="Key takeaways, call to action"></textarea></div>' +
+
+    '<h3 style="margin-top:4px">Supporting Details</h3>' +
+    '<label>Key Topics &amp; Use Cases</label>' +
+    '<textarea id="f-key-topics" rows="3" placeholder="What specific topics, technologies, or use cases will you address?"></textarea>' +
+
+    '<div class="field-row">' +
+      '<div><label>Demos or Videos</label><input id="f-demos" placeholder="Describe any demos or video content"></div>' +
+      '<div><label>Featured Intel Products</label><input id="f-products" placeholder="e.g. Gaudi 3, Xeon 6, Intel TDX"></div>' +
+    '</div>' +
+
+    '<div class="field-row">' +
+      '<div><label>Partner / Customer Highlights</label><input id="f-partner-highlights" placeholder="Customer names, case studies, co-presenters"></div>' +
+      '<div><label>New Launches or Disclosures</label><input id="f-launches" placeholder="Any new product announcements or pre-release content?"></div>' +
+    '</div>' +
+
+    '<div id="msg"></div>' +
+    '<div style="display:flex;gap:12px;margin-top:8px">' +
+      '<button class="btn-primary" onclick="submitForm()">Submit Session</button>' +
+      '<button class="btn-secondary" onclick="saveDraft()">Save Draft</button>' +
+    '</div>' +
+  '</div>';
+
+  // Upload tab
+  html += '<div class="tab-panel" id="panel-upload">' +
+    '<div class="alert-info">Download the <strong>Intel One-Page Session Template</strong>, fill it out, then upload it here. We\'ll extract your fields automatically &mdash; you can review everything before submitting.</div>' +
+    '<div class="drop-zone" id="drop-zone" onclick="document.getElementById(\'pptx-input\').click()">' +
+      '<div style="font-size:32px;margin-bottom:8px">&#128196;</div>' +
+      '<div style="font-weight:700;margin-bottom:4px">Drop your .pptx file here</div>' +
+      '<div style="font-size:13px;color:#666">or click to browse</div>' +
+      '<input type="file" id="pptx-input" accept=".pptx" style="display:none">' +
+    '</div>' +
+    '<div id="upload-msg"></div>' +
+    '<div id="upload-preview" style="display:none;margin-top:16px">' +
+      '<div class="alert-success">&#10003; Fields extracted from your template. Review below and click Submit.</div>' +
+      '<div id="preview-fields"></div>' +
+      '<div id="upload-submit-msg"></div>' +
+      '<button class="btn-primary" id="btn-upload-submit" onclick="submitUpload()" style="margin-top:12px">Submit Session</button>' +
+    '</div>' +
+  '</div>';
+
+  html += '</div></div>'; // close card + container
+
+  // JavaScript
+  var js = 'var TOKEN=' + JSON.stringify(token) + ';' +
+    'var parsedFields={};' +
+    'var uploadFilename="";' +
+
+    'function switchTab(t){' +
+      'document.querySelectorAll(".tab").forEach(function(b){b.classList.remove("active");});' +
+      'document.querySelectorAll(".tab-panel").forEach(function(p){p.classList.remove("active");});' +
+      'document.getElementById("tab-"+t).classList.add("active");' +
+      'document.getElementById("panel-"+t).classList.add("active");' +
+    '}' +
+
+    'function getFormData(){return{' +
+      'title:document.getElementById("f-title").value,' +
+      'abstract:document.getElementById("f-abstract").value,' +
+      'format:document.getElementById("f-format").value,' +
+      'duration:document.getElementById("f-duration").value,' +
+      'intel_speakers:document.getElementById("f-intel-speakers").value,' +
+      'partner_walkons:document.getElementById("f-partner-walkons").value,' +
+      'key_topics:document.getElementById("f-key-topics").value,' +
+      'demos:document.getElementById("f-demos").value,' +
+      'featured_products:document.getElementById("f-products").value,' +
+      'partner_highlights:document.getElementById("f-partner-highlights").value,' +
+      'new_launches:document.getElementById("f-launches").value,' +
+      'flow_intro:document.getElementById("f-flow-intro").value,' +
+      'flow_s1:document.getElementById("f-flow-s1").value,' +
+      'flow_s1_dur:document.getElementById("f-s1-dur").value,' +
+      'flow_s2:document.getElementById("f-flow-s2").value,' +
+      'flow_s2_dur:document.getElementById("f-s2-dur").value,' +
+      'flow_s3:document.getElementById("f-flow-s3").value,' +
+      'flow_s3_dur:document.getElementById("f-s3-dur").value,' +
+      'flow_wrap:document.getElementById("f-flow-wrap").value' +
+    '};}' +
+
+    'async function submitForm(isDraft){' +
+      'var msg=document.getElementById("msg");' +
+      'var d=getFormData();' +
+      'if(!isDraft&&(!d.title.trim()||!d.abstract.trim())){msg.style.color="#CC0000";msg.textContent="Title and Abstract are required.";return;}' +
+      'msg.style.color="#666";msg.textContent="Saving...";' +
+      'try{var r=await fetch("/api/cfp/"+TOKEN+"/submit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});' +
+      'var data=await r.json();' +
+      'if(data.ok){msg.style.color="#007A3D";msg.textContent=isDraft?"\\u2713 Draft saved.":"\\u2713 Session submitted! Check your email for confirmation.";' +
+      'if(!isDraft){document.querySelectorAll("input:not([type=file]),textarea,select").forEach(function(el){el.disabled=true;});}}' +
+      'else{msg.style.color="#CC0000";msg.textContent="Error: "+(data.error||"Submission failed");}' +
+      '}catch(e){msg.style.color="#CC0000";msg.textContent="Error: "+e.message;}}' +
+
+    'function saveDraft(){submitForm(true);}' +
+
+    // Upload handling
+    'var dropZone=document.getElementById("drop-zone");' +
+    'dropZone.addEventListener("dragover",function(e){e.preventDefault();dropZone.classList.add("dragover");});' +
+    'dropZone.addEventListener("dragleave",function(){dropZone.classList.remove("dragover");});' +
+    'dropZone.addEventListener("drop",function(e){e.preventDefault();dropZone.classList.remove("dragover");var f=e.dataTransfer.files[0];if(f)handleUpload(f);});' +
+    'document.getElementById("pptx-input").addEventListener("change",function(){if(this.files[0])handleUpload(this.files[0]);});' +
+
+    'async function handleUpload(file){' +
+      'var msg=document.getElementById("upload-msg");' +
+      'if(!file.name.endsWith(".pptx")){msg.style.color="#CC0000";msg.textContent="Please upload a .pptx file.";return;}' +
+      'msg.style.color="#666";msg.textContent="Parsing your template...";' +
+      'uploadFilename=file.name;' +
+      'var form=new FormData();form.append("pptx",file);' +
+      'try{var r=await fetch("/api/cfp/"+TOKEN+"/upload",{method:"POST",body:form});' +
+      'var data=await r.json();' +
+      'if(data.ok){parsedFields=data.parsed||{};' +
+        'msg.style.color="#007A3D";msg.textContent=data.message||"Parsed successfully.";' +
+        'showUploadPreview(parsedFields,data.parse_success);' +
+      '}else{msg.style.color="#CC0000";msg.textContent="Error: "+(data.error||"Upload failed");}}' +
+      'catch(e){msg.style.color="#CC0000";msg.textContent="Error: "+e.message;}}' +
+
+    'function showUploadPreview(fields,success){' +
+      'var preview=document.getElementById("upload-preview");' +
+      'var pf=document.getElementById("preview-fields");' +
+      'preview.style.display="block";' +
+      'var fieldDefs=[["title","Session Title"],["abstract","Abstract"],["format","Format"],["duration","Duration"],["intel_speakers","Intel Speakers"],["partner_walkons","Partner Walk-Ons"],["key_topics","Key Topics"],["demos","Demos"],["featured_products","Featured Products"],["partner_highlights","Partner Highlights"],["new_launches","New Launches"]];' +
+      'pf.innerHTML=fieldDefs.map(function(fd){' +
+        'var val=fields[fd[0]]||"";' +
+        'var isLong=fd[0]==="abstract"||fd[0]==="key_topics";' +
+        'return "<div style=\\"margin-bottom:10px\\"><label style=\\"font-size:12px;font-weight:700;display:block;margin-bottom:4px\\">"+fd[1]+"</label>"+(isLong?"<textarea id=\\"pu-"+fd[0]+"\\" rows=\\"3\\" style=\\"width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit;resize:vertical\\">"+val+"</textarea>":"<input id=\\"pu-"+fd[0]+"\\" value=\\""+val+"\\" style=\\"width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit\\">")+"</div>";' +
+      '}).join("");}' +
+
+    'async function submitUpload(){' +
+      'var msg=document.getElementById("upload-submit-msg");' +
+      'var fieldDefs=["title","abstract","format","duration","intel_speakers","partner_walkons","key_topics","demos","featured_products","partner_highlights","new_launches"];' +
+      'var d={};fieldDefs.forEach(function(f){var el=document.getElementById("pu-"+f);if(el)d[f]=el.value;});' +
+      'if(!d.title||!d.title.trim()){msg.style.color="#CC0000";msg.textContent="Title is required.";return;}' +
+      'msg.style.color="#666";msg.textContent="Submitting...";' +
+      'try{var r=await fetch("/api/cfp/"+TOKEN+"/submit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});' +
+      'var data=await r.json();' +
+      'if(data.ok){msg.style.color="#007A3D";msg.textContent="\\u2713 Session submitted! Check your email for confirmation.";document.getElementById("btn-upload-submit").disabled=true;}' +
+      'else{msg.style.color="#CC0000";msg.textContent="Error: "+(data.error||"Failed");}}' +
+      'catch(e){msg.style.color="#CC0000";msg.textContent="Error: "+e.message;}}';
+
+  html += '<script>' + js + '</scr' + 'ipt></body></html>';
+  return html;
+}
 
 
 // ─── v2.1 PHASE 1: CFP ADMIN — SCHEMA, CONFIG, INVITE SYSTEM ─────────────────
