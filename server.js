@@ -1467,7 +1467,7 @@ app.get('/submit/token/:token', async function(req, res) {
 // ─── PHASE 4.5: COMPETITIVE INTELLIGENCE ─────────────────────────────────────
 
 // ── Perplexity Sonar client (Stage 1) ────────────────────────────────────────
-async function callSonar(pillar, audienceContext) {
+async function callSonar(pillar, audienceContext, knownCompetitors, strategicNotes) {
   var PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
   if (!PERPLEXITY_API_KEY) {
     console.log('[Sonar] No PERPLEXITY_API_KEY — skipping');
@@ -1516,7 +1516,8 @@ async function callSonar(pillar, audienceContext) {
 }
 
 // ── Stage 2: Gap classification (claude-sonnet-4-6) ───────────────────────────
-async function classifyGaps(sonarData, eventSystemPrompt, submissions, pillar) {
+async function classifyGaps(sonarData, eventSystemPrompt, submissions, pillar, strategicNotes) {
+  var strategicCtx = strategicNotes ? '\n\nStrategic context provided by event team: ' + strategicNotes : '';
   // Trim eventSystemPrompt to first 600 chars to avoid timeout
   var eventContext = (eventSystemPrompt || '').slice(0, 600);
 
@@ -1612,9 +1613,14 @@ app.post('/api/events/:id/competitive/run', async function(req, res) {
     }
     if (pillars.length === 0) pillars = ['Agentic AI', 'Data Center', 'Edge Computing', 'Commercial Client'];
 
-    // Extract audience context
+    // Extract audience context — allow user override/augmentation
     var audienceMatch = evt.ai_system_prompt.match(/PRIMARY AUDIENCE[:\s]+([^\n]+)/i);
-    var audienceContext = audienceMatch ? audienceMatch[1] : 'government and defense technology leaders';
+    var baseAudience = audienceMatch ? audienceMatch[1] : 'government and defense technology leaders';
+    var audienceNotes = (req.body.audience_notes || '').trim();
+    var knownCompetitors = (req.body.known_competitors || '').trim();
+    var strategicNotes = (req.body.strategic_notes || '').trim();
+    // Merge auto-detected audience with any user-supplied notes
+    var audienceContext = audienceNotes ? baseAudience + '. Additional context: ' + audienceNotes : baseAudience;
 
     res.json({ ok: true, message: 'Pipeline started', pillars: pillars, status: 'running' });
 
@@ -1628,7 +1634,7 @@ app.post('/api/events/:id/competitive/run', async function(req, res) {
           console.log('[Competitive] Stage 1: Sonar research for pillar:', pillar);
 
           // Stage 1: Perplexity Sonar
-          var sonarData = await callSonar(pillar, audienceContext);
+          var sonarData = await callSonar(pillar, audienceContext, knownCompetitors, strategicNotes);
           if (!sonarData) {
             sonarData = { dominantSpeakers: [], dominantOrganizations: [], saturatedTopics: [], emergingTopics: [], missingTopics: [], aiCitations: [], recentConferenceAgendas: [] };
           }
@@ -1641,7 +1647,7 @@ app.post('/api/events/:id/competitive/run', async function(req, res) {
           // Stage 2: Claude Sonnet gap classification
           var gapAnalysis = null;
           try {
-            gapAnalysis = await classifyGaps(sonarData, evt.ai_system_prompt, pillarSubs, pillar);
+            gapAnalysis = await classifyGaps(sonarData, evt.ai_system_prompt, pillarSubs, pillar, strategicNotes);
           } catch(ge) {
             console.error('[Competitive] Stage 2 error:', ge.message);
             gapAnalysis = { marketSnapshot: {}, topics: [], whitespaceOpportunities: [], competitorProfiles: [] };
