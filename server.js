@@ -2092,7 +2092,7 @@ app.post('/api/cfp/:token/submit', async function(req, res) {
 });
 
 // ── Submit via PPTX upload ─────────────────────────────────────────────────────
-app.post('/api/cfp/:token/upload', multerUpload.single('pptx'), async function(req, res) {
+app.post('/api/cfp/:token/upload', upload.single('pptx'), async function(req, res) {
   try {
     var sql = getDb();
     var token = req.params.token;
