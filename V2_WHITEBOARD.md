@@ -613,6 +613,7 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 > **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI)
 > **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI)
 > **Phase 3 shipped** — `edcd9b4` (server) + `ef306c7` (UI) — deployed to Render April 1, 2026
+> **Phase 4 shipped** — `90f4da9` (server) + `cb55a99` (UI) — deployed to Render April 1, 2026
 > **Phase 3 bug fix** — `c674789` — Memory Brain UI rewritten to eliminate JS quote escaping crashes — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
 
 ### Phase 1 — Quality Gates & Compliance
@@ -664,11 +665,11 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [ ] Update README
 
 ### Phase 4 — Program Intelligence
-- [ ] Program health dashboard (coverage map, track balance, readiness timeline)
-- [ ] Score distribution histogram
-- [ ] Cross-event trend intelligence (requires 2+ events with memory)
-- [ ] KPI benchmarking vs. prior year same event
-- [ ] Insight cards on memory dashboard
+- [x] Program health dashboard — track balance, slot utilization, avg score per track, gate readiness bars with deadline countdown
+- [x] Score distribution histogram — 6-bucket breakdown with color coding
+- [x] Cross-event trend intelligence — insight chips, event score trajectory table, auto-generated benchmarks
+- [x] KPI benchmarking — score delta, demo/partner participation rate comparison vs prior events
+- [x] Memory brain insight cards surfaced in Program section
 - [ ] Update README with all new endpoints and env vars
 
 ---
@@ -705,5 +706,5 @@ The tool succeeds when the feedback loop closes:
 
 ---
 
-*Last updated: April 1, 2026*
+*Last updated: April 1, 2026 — Phases 1–4 complete*
 *Owner: Brian Morgan / Taylor*
