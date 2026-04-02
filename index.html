@@ -1641,7 +1641,13 @@ function renderCompetitiveResults(data, el) {
     html += '</div>';
   }
 
-  el.innerHTML = html;
+  try {
+    el.innerHTML = html;
+  } catch(renderErr) {
+    console.error('[renderCompetitiveResults] innerHTML set failed:', renderErr);
+    el.innerHTML = '<div style="padding:16px;color:#CC0000;font-size:13px">Render error — check console</div>';
+    return;
+  }
 
   // Wire up buttons
   var rerunBtn = document.getElementById('btn-rerun-competitive');
