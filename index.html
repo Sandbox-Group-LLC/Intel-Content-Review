@@ -132,6 +132,10 @@ tr:hover td{background:#f9f9f9;}
     <div id="section-competitive" class="section">
       <div id="competitive-content"></div>
     </div>
+    <!-- ADMIN SECTION -->
+    <div id="section-admin" class="section">
+      <div id="admin-content"></div>
+    </div>
     <!-- PROGRAM SECTION -->
     <div id="section-program" class="section">
       <div id="program-content"></div>
@@ -168,10 +172,11 @@ function showSection(name) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.getElementById('section-' + name).classList.add('active');
   document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
-    a.classList.toggle('active', ['events','submissions','review','speakers','competitive','program','memory'][i] === name);
+    a.classList.toggle('active', ['events','admin','submissions','review','speakers','competitive','program','memory'][i] === name);
   });
   document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
   document.getElementById('topbar-action').innerHTML = '';
+  if (name === 'admin') { renderAdmin(); }
   if (name === 'events') { renderEventsList(); addTopbarBtn('New Event', showNewEventForm); }
   if (name === 'submissions') { renderSubmissions(); }
   if (name === 'review') { renderReview(); }
@@ -229,6 +234,7 @@ async function loadEvents() {
     var activeSect = document.querySelector('.section.active');
     if (activeSect && activeSect.id !== 'section-events') {
       var name = activeSect.id.replace('section-', '');
+      if (name === 'admin') renderAdmin();
       if (name === 'competitive') renderCompetitive();
       else if (name === 'program') renderProgram();
       else if (name === 'memory') renderMemory();
@@ -246,6 +252,7 @@ function onEventChange() {
   if (sect && sect.id === 'section-submissions') renderSubmissions();
   if (sect && sect.id === 'section-review') renderReview();
   if (sect && sect.id === 'section-speakers') renderSpeakers();
+  if (sect && sect.id === 'section-admin') renderAdmin();
   if (sect && sect.id === 'section-competitive') renderCompetitive();
   if (sect && sect.id === 'section-program') renderProgram();
   if (sect && sect.id === 'section-memory') renderMemory();
@@ -1379,6 +1386,212 @@ window.showNewEventForm = showNewEventForm;
 window.switchPanelTab = switchPanelTab;
 window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
+// ─── v2.1 ADMIN UI ───────────────────────────────────────────────────────────
+
+async function renderAdmin() {
+  var el = document.getElementById('admin-content');
+  if (!el) return;
+  if (!currentEventId) {
+    el.innerHTML = '<p style="color:#666;padding:24px">Select an event to manage CFP settings.</p>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">Loading admin settings...</div>';
+
+  try {
+    var cfgData = await api('GET', '/api/events/' + currentEventId + '/cfp/config');
+    var invData = await api('GET', '/api/events/' + currentEventId + '/cfp/invitations');
+    var evtData = allEvents.find(function(e){ return String(e.id) === String(currentEventId); });
+    var cfg = cfgData.config || {};
+    var invitations = invData.invitations || [];
+    var slug = (evtData && evtData.slug) || currentEventId;
+
+    var html = '';
+
+    // ── CFP Status banner ──
+    var isOpen = cfg.status === 'open';
+    html += '<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:14px 16px;background:' + (isOpen ? '#F0FAF5' : '#FFF0F0') + ';border:1px solid ' + (isOpen ? '#007A3D' : '#CC0000') + '">' +
+      '<div style="font-weight:700;color:' + (isOpen ? '#007A3D' : '#CC0000') + ';font-size:14px">CFP ' + (isOpen ? 'OPEN' : 'CLOSED') + '</div>' +
+      '<div style="font-size:13px;color:#666;flex:1">' + (isOpen ? 'Speakers can access their portal and submit sessions.' : 'Invitations will be sent but portal submissions are paused.') + '</div>' +
+      '<button class="btn-primary" id="btn-toggle-cfp" style="font-size:12px;padding:8px 16px">' + (isOpen ? 'Close CFP' : 'Open CFP') + '</button>' +
+    '</div>';
+
+    // ── Two-column layout: Config left, Invite right ──
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">';
+
+    // Config panel
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">CFP CONFIGURATION</div>' +
+      '<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Submission Deadline</label>' +
+        '<input id="cfg-deadline" value="' + escHtml(cfg.deadline || '') + '" placeholder="e.g. April 15, 2026" style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit"></div>' +
+      '<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Invitation Email Heading</label>' +
+        '<input id="cfg-heading" value="' + escHtml(cfg.welcome_heading || '') + '" placeholder="You\'re invited to submit a session" style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit"></div>' +
+      '<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Invitation Email Body</label>' +
+        '<textarea id="cfg-body" placeholder="We\'d love to have you share your expertise..." style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit;min-height:80px;resize:vertical">' + escHtml(cfg.welcome_body || '') + '</textarea></div>' +
+      '<div style="margin-bottom:14px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Reply-To Email</label>' +
+        '<input id="cfg-replyto" value="' + escHtml(cfg.reply_to_email || '') + '" placeholder="your@intel.com" style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit"></div>' +
+      '<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">CFP Portal Base URL</label>' +
+        '<div style="padding:8px;background:#EAEAEA;font-size:12px;font-family:monospace;color:#2E2F2F;word-break:break-all">' + window.location.origin + '/cfp/' + escHtml(slug) + '/[token]</div></div>' +
+      '<button class="btn-primary" id="btn-save-cfg" style="font-size:12px;padding:8px 16px">Save Configuration</button>' +
+      '<span id="cfg-saved-msg" style="font-size:12px;color:#007A3D;margin-left:10px;display:none">✓ Saved</span>' +
+    '</div>';
+
+    // Invite panel
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">INVITE SPEAKERS</div>' +
+      '<div style="margin-bottom:6px"><label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Single Invite</label>' +
+        '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+          '<input id="invite-name" placeholder="Name (optional)" style="flex:0 0 140px;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit">' +
+          '<input id="invite-email" placeholder="email@intel.com" style="flex:1;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit">' +
+          '<button class="btn-primary" id="btn-send-invite" style="font-size:12px;padding:8px 12px;white-space:nowrap">Send</button>' +
+        '</div>' +
+        '<div id="invite-single-msg" style="font-size:12px;margin-bottom:12px"></div></div>' +
+      '<div style="border-top:1px solid #EAEAEA;padding-top:12px;margin-bottom:6px">' +
+        '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Bulk Invite <span style="font-weight:400;color:#666">(comma, semicolon, or line separated)</span></label>' +
+        '<textarea id="invite-bulk" placeholder="speaker1@intel.com&#10;speaker2@intel.com&#10;partner@company.com" style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit;min-height:100px;resize:vertical"></textarea>' +
+        '<button class="btn-secondary" id="btn-send-bulk" style="margin-top:8px;font-size:12px;padding:8px 16px">Send All Invites</button>' +
+        '<div id="invite-bulk-msg" style="font-size:12px;margin-top:8px"></div>' +
+      '</div>' +
+    '</div>';
+
+    html += '</div>';
+
+    // ── Invitation Tracker ──
+    var sentCount = invitations.length;
+    var openedCount = invitations.filter(function(i){ return i.opened_at; }).length;
+    var submittedCount = invitations.filter(function(i){ return i.submitted_at || i.submission_id; }).length;
+    var pendingCount = sentCount - submittedCount;
+
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">' +
+        '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase">INVITATION TRACKER</div>' +
+        '<div style="display:flex;gap:16px;font-size:12px;color:#666">' +
+          '<span><strong style="color:#2E2F2F">' + sentCount + '</strong> invited</span>' +
+          '<span><strong style="color:#00AAE8">' + openedCount + '</strong> opened</span>' +
+          '<span><strong style="color:#007A3D">' + submittedCount + '</strong> submitted</span>' +
+          '<span><strong style="color:#B8860B">' + pendingCount + '</strong> pending</span>' +
+        '</div>' +
+      '</div>';
+
+    if (invitations.length === 0) {
+      html += '<p style="color:#666;font-size:13px">No invitations sent yet. Use the form above to invite speakers.</p>';
+    } else {
+      html += '<div style="display:grid;grid-template-columns:200px 1fr 100px 120px 80px;gap:8px;font-size:11px;font-weight:700;color:#666;padding-bottom:6px;border-bottom:1px solid #EAEAEA;margin-bottom:8px">' +
+        '<div>Name / Email</div><div>Session</div><div style="text-align:center">Status</div><div style="text-align:center">Last Activity</div><div style="text-align:center">Actions</div></div>';
+      invitations.forEach(function(inv) {
+        var status, statusColor, statusBg;
+        if (inv.submission_id || inv.submitted_at) {
+          status = 'Submitted'; statusColor = '#007A3D'; statusBg = '#F0FAF5';
+        } else if (inv.opened_at) {
+          status = 'Opened'; statusColor = '#00AAE8'; statusBg = '#EEF6FB';
+        } else {
+          status = 'Invited'; statusColor = '#B8860B'; statusBg = '#FFF8EC';
+        }
+        var lastActivity = inv.submitted_at || inv.opened_at || inv.sent_at;
+        var lastLabel = inv.submitted_at ? 'Submitted' : inv.opened_at ? 'Opened' : 'Sent';
+        html += '<div style="display:grid;grid-template-columns:200px 1fr 100px 120px 80px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:12px">' +
+          '<div><div style="font-weight:700">' + escHtml(inv.name || '—') + '</div><div style="color:#666;font-size:11px">' + escHtml(inv.email) + '</div></div>' +
+          '<div style="color:#666">' + (inv.submission_title ? '<a href="#" class="cfp-goto-submission" data-id="' + inv.submission_id + '" style="color:#000864;font-weight:700">' + escHtml(inv.submission_title.slice(0,50)) + '...</a>' : '<span style="color:#999">Not submitted</span>') + '</div>' +
+          '<div style="text-align:center"><span style="background:' + statusBg + ';color:' + statusColor + ';border:1px solid ' + statusColor + ';padding:2px 8px;font-size:11px;font-weight:700">' + status + '</span></div>' +
+          '<div style="text-align:center;color:#666;font-size:11px">' + lastLabel + '<br>' + new Date(lastActivity).toLocaleDateString() + '</div>' +
+          '<div style="text-align:center;display:flex;gap:4px;justify-content:center">' +
+            (status !== 'Submitted' ? '<button data-inv-id="' + inv.id + '" data-inv-email="' + escHtml(inv.email) + '" class="btn-secondary btn-resend-invite" style="font-size:10px;padding:3px 8px">Resend</button>' : '') +
+            '<button data-inv-id="' + inv.id + '" class="btn-secondary btn-revoke-invite" style="font-size:10px;padding:3px 8px;color:#CC0000;border-color:#CC0000">Revoke</button>' +
+          '</div>' +
+        '</div>';
+      });
+    }
+    html += '</div>';
+
+    el.innerHTML = html;
+
+    // ── Wire up buttons ──
+    var toggleBtn = document.getElementById('btn-toggle-cfp');
+    if (toggleBtn) toggleBtn.onclick = async function() {
+      var newStatus = isOpen ? 'closed' : 'open';
+      var r = await api('PUT', '/api/events/' + currentEventId + '/cfp/config', { status: newStatus });
+      if (r.ok) renderAdmin();
+    };
+
+    var saveCfgBtn = document.getElementById('btn-save-cfg');
+    if (saveCfgBtn) saveCfgBtn.onclick = async function() {
+      var body = {
+        status: cfg.status || 'closed',
+        deadline: document.getElementById('cfg-deadline').value,
+        welcome_heading: document.getElementById('cfg-heading').value,
+        welcome_body: document.getElementById('cfg-body').value,
+        reply_to_email: document.getElementById('cfg-replyto').value
+      };
+      var r = await api('PUT', '/api/events/' + currentEventId + '/cfp/config', body);
+      if (r.ok) {
+        var msg = document.getElementById('cfg-saved-msg');
+        if (msg) { msg.style.display = 'inline'; setTimeout(function(){ msg.style.display = 'none'; }, 2000); }
+      }
+    };
+
+    var sendInviteBtn = document.getElementById('btn-send-invite');
+    if (sendInviteBtn) sendInviteBtn.onclick = async function() {
+      var email = document.getElementById('invite-email').value.trim();
+      var name = document.getElementById('invite-name').value.trim();
+      var msgEl = document.getElementById('invite-single-msg');
+      if (!email) { if (msgEl) { msgEl.style.color = '#CC0000'; msgEl.textContent = 'Email is required'; } return; }
+      sendInviteBtn.disabled = true; sendInviteBtn.textContent = 'Sending...';
+      var r = await api('POST', '/api/events/' + currentEventId + '/cfp/invite', { email: email, name: name });
+      sendInviteBtn.disabled = false; sendInviteBtn.textContent = 'Send';
+      if (msgEl) {
+        msgEl.style.color = r.ok ? '#007A3D' : '#CC0000';
+        msgEl.textContent = r.ok ? '✓ ' + (r.resent ? 'Resent to ' : 'Sent to ') + email : 'Error: ' + (r.error || 'Send failed');
+      }
+      if (r.ok) { document.getElementById('invite-email').value = ''; document.getElementById('invite-name').value = ''; renderAdmin(); }
+    };
+
+    var sendBulkBtn = document.getElementById('btn-send-bulk');
+    if (sendBulkBtn) sendBulkBtn.onclick = async function() {
+      var emails = document.getElementById('invite-bulk').value;
+      var msgEl = document.getElementById('invite-bulk-msg');
+      if (!emails.trim()) { if (msgEl) { msgEl.style.color = '#CC0000'; msgEl.textContent = 'Paste at least one email'; } return; }
+      sendBulkBtn.disabled = true; sendBulkBtn.textContent = 'Sending...';
+      var r = await api('POST', '/api/events/' + currentEventId + '/cfp/invite-bulk', { emails: emails });
+      sendBulkBtn.disabled = false; sendBulkBtn.textContent = 'Send All Invites';
+      if (msgEl) {
+        msgEl.style.color = r.ok ? '#007A3D' : '#CC0000';
+        msgEl.textContent = r.ok
+          ? '✓ Sent: ' + r.results.sent + ' new, ' + r.results.resent + ' resent' + (r.results.failed > 0 ? ', ' + r.results.failed + ' failed' : '')
+          : 'Error: ' + (r.error || 'Bulk send failed');
+      }
+      if (r.ok) { document.getElementById('invite-bulk').value = ''; renderAdmin(); }
+    };
+
+    el.querySelectorAll('.btn-resend-invite').forEach(function(btn) {
+      btn.onclick = async function() {
+        var email = this.getAttribute('data-inv-email');
+        this.textContent = 'Sending...'; this.disabled = true;
+        var r = await api('POST', '/api/events/' + currentEventId + '/cfp/invite', { email: email });
+        if (r.ok) { renderAdmin(); } else { this.textContent = 'Resend'; this.disabled = false; alert('Error: ' + (r.error || 'Failed')); }
+      };
+    });
+
+    el.querySelectorAll('.btn-revoke-invite').forEach(function(btn) {
+      btn.onclick = async function() {
+        var invId = this.getAttribute('data-inv-id');
+        if (!confirm('Revoke this invitation? The portal link will stop working.')) return;
+        var r = await api('DELETE', '/api/cfp/invitations/' + invId);
+        if (r.ok) renderAdmin();
+      };
+    });
+
+    el.querySelectorAll('.cfp-goto-submission').forEach(function(link) {
+      link.onclick = function(e) {
+        e.preventDefault();
+        showSection('review');
+      };
+    });
+
+  } catch(err) {
+    el.innerHTML = '<div style="padding:16px;color:#CC0000;font-size:13px">Error: ' + escHtml(err.message || String(err)) + '</div>';
+  }
+}
+
+
 // ─── COMPETITIVE INTELLIGENCE UI ─────────────────────────────────────────────
 
 var _competitivePollInterval = null;
