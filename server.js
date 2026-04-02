@@ -1053,6 +1053,11 @@ app.post('/api/submissions/:id/score', async function (req, res) {
   try {
     var sql = getDb();
     var id = req.params.id;
+    // Clear any stale score so UI knows work is in progress
+    await sql`UPDATE submissions SET ai_score = NULL WHERE id = ${id}`;
+    // Return immediately — do heavy work async to beat Render's 30s timeout
+    res.json({ ok: true, status: 'running', message: 'Scoring started' });
+    setImmediate(async function() { try {
     var subResult = await sql`
       SELECT
         s.id, s.event_id, s.speaker_id, s.title, s.content_lead, s.bu, s.track,
@@ -1070,7 +1075,6 @@ app.post('/api/submissions/:id/score', async function (req, res) {
       WHERE s.id = ${id}
     `;
     if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
-    var sub = subResult[0];
     var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
     if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
     var evt = evtResult[0];
@@ -1160,10 +1164,12 @@ app.post('/api/submissions/:id/score', async function (req, res) {
         await sql`UPDATE submissions SET score_delta = ${cs - fs} WHERE id = ${id}`;
       }
     } catch(de) {}
-    res.json({ ok: true, scorecard: scorecard, memory_insights: memoryInsights });
+    console.log('[Score] Complete for submission', id);
+    } catch(asyncErr) { console.error('[Score async]', asyncErr.message); }
+    }); // end setImmediate
   } catch (err) {
     console.error('[submissions/score]', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    // res already sent, can't send again
   }
 });
 
@@ -1326,6 +1332,12 @@ app.post('/api/submissions/:id/coach', async function(req, res) {
     var id = req.params.id;
     var subResult = await sql`SELECT * FROM submissions WHERE id = ${id}`;
     if (!subResult.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+    // Return immediately — do heavy work async to beat Render's 30s timeout
+    res.json({ ok: true, status: 'running', message: 'Coaching started' });
+    setImmediate(async function() { try {
+    var subResult2 = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+    if (!subResult2.length) return;
+    var sub = subResult2[0];;
     var sub = subResult[0];
     var evtResult = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
     if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
@@ -1357,10 +1369,12 @@ app.post('/api/submissions/:id/coach', async function(req, res) {
     up.push('Return JSON: {"critical_fixes":[{"issue":"","action":""}],"high_impact":[{"opportunity":"","action":"","expected_gain":""}],"quick_wins":[{"change":"","reason":""}],"past_event_examples":[{"lesson":"","application":""}],"overall_coaching_note":""}');
     var report = await callClaude(sp, up.join('\n'), true);
     await sql`UPDATE submissions SET coaching_report = ${JSON.stringify(report)} WHERE id = ${id}`;
-    res.json({ ok: true, report: report });
-  } catch(err) {
+    console.log('[Coach] Complete for submission', id);
+    } catch(asyncErr) { console.error('[Coach async]', asyncErr.message); }
+    }); // end setImmediate
+  } catch (err) {
     console.error('[api/coach]', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    // res already sent, can't send again
   }
 });
 
