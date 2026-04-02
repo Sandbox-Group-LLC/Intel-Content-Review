@@ -151,6 +151,11 @@ tr:hover td{background:#f9f9f9;}
 <script defer>
 var currentEventId = localStorage.getItem('selectedEventId') || null;
 var allEvents = [];
+
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 var allSubmissions = [];
 
 function toTitleCase(str) {
