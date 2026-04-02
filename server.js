@@ -351,6 +351,9 @@ async function ensureSchema() {
   try { await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS notification_email TEXT`; console.log('[OK] notification_email'); } catch(e) { console.log('[SKIP] notification_email:', e.message); }
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS coaching_report JSONB`; console.log('[OK] coaching_report'); } catch(e) { console.log('[SKIP] coaching_report:', e.message); }
   try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS score_delta INTEGER DEFAULT 0`; console.log('[OK] score_delta'); } catch(e) { console.log('[SKIP] score_delta:', e.message); }
+
+  // ── v2.1 PHASE 1: CFP schema ─────────────────────────────────────────────
+  await ensureCFPSchema(sql);
   try {
     await sql`CREATE TABLE IF NOT EXISTS magic_link_tokens (
       id SERIAL PRIMARY KEY, token TEXT UNIQUE NOT NULL,
@@ -1849,6 +1852,285 @@ app.post('/api/submissions/:id/competitive/reframe', async function(req, res) {
     res.json({ ok: true, reframe: reframe });
   } catch(err) {
     console.error('[api/competitive/reframe]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
+// ─── v2.1 PHASE 1: CFP ADMIN — SCHEMA, CONFIG, INVITE SYSTEM ─────────────────
+
+// ── Schema additions (called inside ensureSchema) ─────────────────────────────
+async function ensureCFPSchema(sql) {
+  // Extend submissions table
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'internal'`; console.log('[OK] submissions.source'); } catch(e) { console.log('[SKIP] source:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS intel_speakers TEXT`; console.log('[OK] intel_speakers'); } catch(e) { console.log('[SKIP] intel_speakers:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS partner_walkons TEXT`; console.log('[OK] partner_walkons:', e.message); } catch(e) { console.log('[SKIP] partner_walkons:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS session_flow JSONB`; console.log('[OK] session_flow'); } catch(e) { console.log('[SKIP] session_flow:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS cfp_raw_filename TEXT`; console.log('[OK] cfp_raw_filename'); } catch(e) { console.log('[SKIP] cfp_raw_filename:', e.message); }
+  try { await sql`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS cfp_raw_file BYTEA`; console.log('[OK] cfp_raw_file'); } catch(e) { console.log('[SKIP] cfp_raw_file:', e.message); }
+
+  // CFP config per event
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS cfp_config (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER UNIQUE REFERENCES events(id) ON DELETE CASCADE,
+      status TEXT DEFAULT 'closed',
+      deadline TEXT,
+      welcome_heading TEXT,
+      welcome_body TEXT,
+      reply_to_email TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`;
+    console.log('[OK] cfp_config table');
+  } catch(e) { console.log('[SKIP] cfp_config:', e.message); }
+
+  // CFP invitations
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS cfp_invitations (
+      id SERIAL PRIMARY KEY,
+      event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+      token TEXT UNIQUE NOT NULL,
+      email TEXT NOT NULL,
+      name TEXT,
+      sent_at TIMESTAMPTZ DEFAULT NOW(),
+      opened_at TIMESTAMPTZ,
+      submitted_at TIMESTAMPTZ,
+      submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+      reminder_count INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`;
+    console.log('[OK] cfp_invitations table');
+  } catch(e) { console.log('[SKIP] cfp_invitations:', e.message); }
+}
+
+// ── CFP email helpers ─────────────────────────────────────────────────────────
+function buildCFPInviteEmail(invite, evt, cfpConfig, portalUrl) {
+  var heading = (cfpConfig && cfpConfig.welcome_heading) || 'You\'re invited to submit a session';
+  var body = (cfpConfig && cfpConfig.welcome_body) || 'We\'d love to have you share your expertise at ' + evt.name + '.';
+  var deadline = (cfpConfig && cfpConfig.deadline) ? 'Submission deadline: <strong>' + cfpConfig.deadline + '</strong><br><br>' : '';
+  var greeting = invite.name ? 'Hi ' + invite.name + ',' : 'Hi,';
+  return '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">' +
+    '<div style="background:#000864;padding:20px 24px;display:flex;align-items:center;gap:12px">' +
+      '<span style="color:#fff;font-weight:700;font-size:18px">' + escHtmlServer(evt.name) + '</span>' +
+    '</div>' +
+    '<div style="padding:32px 24px;background:#fff">' +
+      '<p style="margin:0 0 12px">' + greeting + '</p>' +
+      '<h2 style="color:#000864;font-size:20px;margin:0 0 12px">' + escHtmlServer(heading) + '</h2>' +
+      '<p style="color:#444;margin:0 0 16px">' + escHtmlServer(body) + '</p>' +
+      '<p style="color:#444;margin:0 0 24px">' + deadline + 'Use the link below to access your personal submission portal. You\'ll be able to fill out a session proposal form or upload your completed one-page template.</p>' +
+      '<a href="' + portalUrl + '" style="display:inline-block;background:#00AAE8;color:#fff;padding:14px 28px;text-decoration:none;font-weight:700;font-size:15px">Submit Your Session</a>' +
+      '<p style="margin:24px 0 0;font-size:12px;color:#888">This link is personal to you. It expires when submissions close. If you have questions, reply to this email.</p>' +
+    '</div>' +
+    '<div style="background:#EAEAEA;padding:12px 24px;font-size:11px;color:#666">' + escHtmlServer(evt.name) + ' &mdash; Intel Content Review</div>' +
+  '</div>';
+}
+
+function escHtmlServer(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── API Routes ────────────────────────────────────────────────────────────────
+
+// GET CFP config for an event
+app.get('/api/events/:id/cfp/config', async function(req, res) {
+  try {
+    var sql = getDb();
+    var result = await sql`SELECT * FROM cfp_config WHERE event_id = ${req.params.id}`;
+    res.json({ ok: true, config: result[0] || null });
+  } catch(err) {
+    console.error('[api/cfp/config GET]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT update (or create) CFP config for an event
+app.put('/api/events/:id/cfp/config', async function(req, res) {
+  try {
+    var sql = getDb();
+    var b = req.body;
+    var eventId = req.params.id;
+    var result = await sql`
+      INSERT INTO cfp_config (event_id, status, deadline, welcome_heading, welcome_body, reply_to_email, updated_at)
+      VALUES (${eventId}, ${b.status||'closed'}, ${b.deadline||null}, ${b.welcome_heading||null}, ${b.welcome_body||null}, ${b.reply_to_email||null}, NOW())
+      ON CONFLICT (event_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        deadline = EXCLUDED.deadline,
+        welcome_heading = EXCLUDED.welcome_heading,
+        welcome_body = EXCLUDED.welcome_body,
+        reply_to_email = EXCLUDED.reply_to_email,
+        updated_at = NOW()
+      RETURNING *
+    `;
+    res.json({ ok: true, config: result[0] });
+  } catch(err) {
+    console.error('[api/cfp/config PUT]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET all invitations for an event
+app.get('/api/events/:id/cfp/invitations', async function(req, res) {
+  try {
+    var sql = getDb();
+    var result = await sql`
+      SELECT i.*, s.title as submission_title, s.status as submission_status, s.ai_score
+      FROM cfp_invitations i
+      LEFT JOIN submissions s ON s.id = i.submission_id
+      WHERE i.event_id = ${req.params.id}
+      ORDER BY i.sent_at DESC
+    `;
+    res.json({ ok: true, invitations: result });
+  } catch(err) {
+    console.error('[api/cfp/invitations GET]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST send single invite
+app.post('/api/events/:id/cfp/invite', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+    var email = (req.body.email || '').trim().toLowerCase();
+    var name = (req.body.name || '').trim();
+    if (!email) return res.status(400).json({ ok: false, error: 'email required' });
+
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${eventId}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+
+    var cfpResult = await sql`SELECT * FROM cfp_config WHERE event_id = ${eventId}`;
+    var cfpConfig = cfpResult[0] || {};
+
+    // Check for existing invite
+    var existing = await sql`SELECT * FROM cfp_invitations WHERE event_id = ${eventId} AND email = ${email}`;
+    var token, invite;
+    if (existing.length) {
+      token = existing[0].token;
+      invite = existing[0];
+      await sql`UPDATE cfp_invitations SET sent_at = NOW(), reminder_count = reminder_count + 1 WHERE id = ${existing[0].id}`;
+    } else {
+      token = generateToken();
+      var inserted = await sql`
+        INSERT INTO cfp_invitations (event_id, token, email, name, sent_at)
+        VALUES (${eventId}, ${token}, ${email}, ${name||null}, NOW())
+        RETURNING *
+      `;
+      invite = inserted[0];
+    }
+
+    var slug = evt.slug || String(eventId);
+    var portalUrl = APP_URL + '/cfp/' + slug + '/' + token;
+    var subject = existing.length
+      ? 'Reminder: Submit your session for ' + evt.name
+      : 'You\'re invited to submit a session — ' + evt.name;
+    var html = buildCFPInviteEmail(invite, evt, cfpConfig, portalUrl);
+
+    var replyTo = cfpConfig.reply_to_email || FROM_EMAIL;
+    try {
+      var resend = getResend();
+      await resend.emails.send({ from: FROM_EMAIL, to: email, replyTo: replyTo, subject: subject, html: html });
+      console.log('[CFP] Invite sent to', email);
+    } catch(emailErr) {
+      console.error('[CFP] Email failed:', emailErr.message);
+    }
+
+    res.json({ ok: true, token: token, portal_url: portalUrl, resent: existing.length > 0 });
+  } catch(err) {
+    console.error('[api/cfp/invite]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST bulk invite — comma or newline separated emails
+app.post('/api/events/:id/cfp/invite-bulk', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+    var raw = req.body.emails || '';
+    var emails = raw.split(/[\n,;]+/).map(function(e){ return e.trim().toLowerCase(); }).filter(function(e){ return e && e.includes('@'); });
+    if (!emails.length) return res.status(400).json({ ok: false, error: 'No valid emails found' });
+
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${eventId}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+    var cfpResult = await sql`SELECT * FROM cfp_config WHERE event_id = ${eventId}`;
+    var cfpConfig = cfpResult[0] || {};
+    var slug = evt.slug || String(eventId);
+
+    var results = { sent: 0, resent: 0, failed: 0, urls: [] };
+    for (var ei = 0; ei < emails.length; ei++) {
+      var email = emails[ei];
+      try {
+        var existing = await sql`SELECT * FROM cfp_invitations WHERE event_id = ${eventId} AND email = ${email}`;
+        var token;
+        var invite;
+        if (existing.length) {
+          token = existing[0].token;
+          invite = existing[0];
+          await sql`UPDATE cfp_invitations SET sent_at = NOW(), reminder_count = reminder_count + 1 WHERE id = ${existing[0].id}`;
+          results.resent++;
+        } else {
+          token = generateToken();
+          var inserted = await sql`INSERT INTO cfp_invitations (event_id, token, email, sent_at) VALUES (${eventId}, ${token}, ${email}, NOW()) RETURNING *`;
+          invite = inserted[0];
+          results.sent++;
+        }
+        var portalUrl = APP_URL + '/cfp/' + slug + '/' + token;
+        results.urls.push({ email: email, url: portalUrl });
+        var html = buildCFPInviteEmail(invite, evt, cfpConfig, portalUrl);
+        var subject = existing.length ? 'Reminder: Submit your session — ' + evt.name : 'You\'re invited to submit a session — ' + evt.name;
+        try {
+          var resend = getResend();
+          await resend.emails.send({ from: FROM_EMAIL, to: email, subject: subject, html: html });
+        } catch(emailErr) { results.failed++; }
+      } catch(rowErr) { results.failed++; console.error('[CFP bulk] row error:', rowErr.message); }
+    }
+
+    res.json({ ok: true, results: results });
+  } catch(err) {
+    console.error('[api/cfp/invite-bulk]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE revoke an invitation
+app.delete('/api/cfp/invitations/:id', async function(req, res) {
+  try {
+    var sql = getDb();
+    await sql`DELETE FROM cfp_invitations WHERE id = ${req.params.id}`;
+    res.json({ ok: true });
+  } catch(err) {
+    console.error('[api/cfp/invitation DELETE]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET verify CFP invite token (for portal use in Phase 2)
+app.get('/api/cfp/verify/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var result = await sql`
+      SELECT i.*, e.name as event_name, e.slug as event_slug, e.event_date, e.venue,
+             c.status as cfp_status, c.deadline, c.welcome_heading, c.welcome_body,
+             s.id as submission_id, s.title as submission_title, s.status as submission_status
+      FROM cfp_invitations i
+      JOIN events e ON e.id = i.event_id
+      LEFT JOIN cfp_config c ON c.event_id = i.event_id
+      LEFT JOIN submissions s ON s.id = i.submission_id
+      WHERE i.token = ${req.params.token}
+    `;
+    if (!result.length) return res.status(404).json({ ok: false, error: 'Invalid or expired invitation link.' });
+    var row = result[0];
+    // Mark as opened if first visit
+    if (!row.opened_at) {
+      await sql`UPDATE cfp_invitations SET opened_at = NOW() WHERE token = ${req.params.token}`;
+    }
+    res.json({ ok: true, invitation: row });
+  } catch(err) {
+    console.error('[api/cfp/verify]', err.message);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
