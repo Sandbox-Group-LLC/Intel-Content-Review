@@ -1969,19 +1969,38 @@ function parseCFPPptx(buffer) {
       if (absParts.length) fields.abstract = absParts.join(' ');
     }
 
-    // Extract format
-    var formatMatch = fullText.match(/Format:\s*(Panel|Fireside Chat|Roundtable|Presentation)/i);
-    if (formatMatch) fields.format = formatMatch[1];
+    // Extract format — look adjacent to Content Format label, then fall back to keyword search
+    var fmtIdx = texts.findIndex(function(t){ return /Content Format|^Format/i.test(t); });
+    if (fmtIdx >= 0) {
+      for (var fi = fmtIdx + 1; fi < Math.min(fmtIdx + 4, texts.length); fi++) {
+        var ft = texts[fi].trim();
+        // Skip the options list "(Panel, Fireside Chat...)" and "Provided by..."
+        if (ft && ft !== 'TBD' && !ft.startsWith('Provided') && !ft.startsWith('(Panel') && !ft.match(/^\d+\s*min/) && ft.length < 100) {
+          fields.format = ft;
+          break;
+        }
+      }
+    }
+    // Fall back: look for known format keywords anywhere in full text
+    if (!fields.format) {
+      var fmtKw = fullText.match(/\b(Panel|Fireside Chat|Fireside|Roundtable|Presentation)\b/i);
+      if (fmtKw) fields.format = fmtKw[1];
+    }
 
     // Extract duration
     var durMatch = fullText.match(/(\d+)\s*min/i);
     if (durMatch) fields.duration = durMatch[1] + ' min';
 
-    // Extract Intel speakers
+    // Extract Intel speakers — check next few cells after label
     var spIdx = texts.findIndex(function(t){ return /Intel Speakers/i.test(t); });
-    if (spIdx >= 0 && texts[spIdx + 1]) {
-      var spText = texts[spIdx + 1].trim();
-      if (spText && spText !== 'TBD' && !spText.startsWith('Provided')) fields.intel_speakers = spText;
+    if (spIdx >= 0) {
+      for (var si = spIdx + 1; si < Math.min(spIdx + 4, texts.length); si++) {
+        var spText = texts[si].trim();
+        if (spText && spText !== 'TBD' && !spText.startsWith('Provided') && !spText.match(/^Partner/i)) {
+          fields.intel_speakers = spText;
+          break;
+        }
+      }
     }
 
     // Extract partner walk-ons
@@ -2117,7 +2136,7 @@ app.post('/api/cfp/:token/submit', async function(req, res) {
     var subId = inv.submission_id;
     if (subId) {
       // Update existing
-      await sql`UPDATE submissions SET title=${b.title}, abstract=${b.abstract}, content_lead=${inv.name||inv.email}, format=${b.format||null}, duration=${b.duration||null}, intel_speakers=${b.intel_speakers||null}, partner_walkons=${b.partner_walkons||null}, key_topics=${b.key_topics||null}, partner_highlights=${b.partner_highlights||null}, demos=${b.demos||null}, new_launches=${b.new_launches||null}, featured_products=${b.featured_products||null}, session_flow=${sessionFlow}, status='submitted', version_number=COALESCE(version_number,1)+1 WHERE id=${subId}`;
+      await sql`UPDATE submissions SET title=${b.title}, abstract=${b.abstract}, content_lead=${b.intel_speakers||inv.name||inv.email}, format=${b.format||null}, duration=${b.duration||null}, intel_speakers=${b.intel_speakers||null}, partner_walkons=${b.partner_walkons||null}, key_topics=${b.key_topics||null}, partner_highlights=${b.partner_highlights||null}, demos=${b.demos||null}, new_launches=${b.new_launches||null}, featured_products=${b.featured_products||null}, session_flow=${sessionFlow}, status='submitted', version_number=COALESCE(version_number,1)+1 WHERE id=${subId}`;
     } else {
       // Create new
       var newSub = await sql`INSERT INTO submissions (event_id, title, abstract, content_lead, format, duration, intel_speakers, partner_walkons, key_topics, partner_highlights, demos, new_launches, featured_products, session_flow, status, source) VALUES (${inv.event_id}, ${b.title}, ${b.abstract}, ${inv.name||inv.email}, ${b.format||null}, ${b.duration||null}, ${b.intel_speakers||null}, ${b.partner_walkons||null}, ${b.key_topics||null}, ${b.partner_highlights||null}, ${b.demos||null}, ${b.new_launches||null}, ${b.featured_products||null}, ${sessionFlow}, 'submitted', 'cfp') RETURNING id`;
