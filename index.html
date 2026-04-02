@@ -1349,26 +1349,24 @@ window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
 // ─── MEMORY BRAIN UI ─────────────────────────────────────────────────────────
 
-var memoryTab = 'browse'; // browse | survey | speakers
+var memoryTab = 'browse';
 
 async function renderMemory() {
   var el = document.getElementById('memory-content');
   if (!currentEventId) { el.innerHTML = '<p style="color:#666;padding:24px">Select an event to view memory.</p>'; return; }
-
-  el.innerHTML = '<div style="display:flex;gap:0;margin-bottom:24px;border-bottom:2px solid #EAEAEA">' +
-    '<button onclick="switchMemoryTab('browse')" id="mtab-browse" class="mem-tab ' + (memoryTab==='browse'?'active':'') + '">Memory Browser</button>' +
-    '<button onclick="switchMemoryTab('survey')" id="mtab-survey" class="mem-tab ' + (memoryTab==='survey'?'active':'') + '">Survey Import</button>' +
-    '<button onclick="switchMemoryTab('speakers')" id="mtab-speakers" class="mem-tab ' + (memoryTab==='speakers'?'active':'') + '">Speaker History</button>' +
-  '</div>' +
-  '<div id="memory-tab-content"></div>';
-
+  var tabs = [['browse','Memory Browser'],['survey','Survey Import'],['speakers','Speaker History']];
+  var nav = '<div style="display:flex;gap:0;margin-bottom:24px;border-bottom:2px solid #EAEAEA">';
+  tabs.forEach(function(t) { nav += '<button id="mtab-' + t[0] + '" class="mem-tab' + (memoryTab===t[0]?' active':'') + '">' + t[1] + '</button>'; });
+  nav += '</div><div id="memory-tab-content"></div>';
+  el.innerHTML = nav;
+  tabs.forEach(function(t) { var b=document.getElementById('mtab-'+t[0]); if(b) b.onclick=function(){switchMemoryTab(t[0]);}; });
   renderMemoryTab();
 }
 
 function switchMemoryTab(tab) {
   memoryTab = tab;
-  document.querySelectorAll('.mem-tab').forEach(function(t) { t.classList.remove('active'); });
-  var btn = document.getElementById('mtab-' + tab);
+  document.querySelectorAll('.mem-tab').forEach(function(t){t.classList.remove('active');});
+  var btn = document.getElementById('mtab-'+tab);
   if (btn) btn.classList.add('active');
   renderMemoryTab();
 }
@@ -1378,103 +1376,97 @@ async function renderMemoryTab() {
   if (!el) return;
 
   if (memoryTab === 'browse') {
-    el.innerHTML = '<div style="color:#666;font-size:13px">Loading memories...</div>';
+    el.innerHTML = '<div style="font-size:12px;color:#666">Loading memories...</div>';
     var data = await api('GET', '/api/events/' + currentEventId + '/memories');
     if (!data.ok) { el.innerHTML = '<p style="color:#CC0000">Error loading memories.</p>'; return; }
     var memories = data.memories || [];
 
+    var catOpts = [['what_worked','What Worked'],['what_didnt','What Didn&#39;t'],['speaker_insight','Speaker Insight'],['topic_trend','Topic Trend'],['audience_signal','Audience Signal'],['kpi_outcome','KPI Outcome']];
+    var selHtml = '<select id="mem-cat" style="flex:0 0 160px">';
+    catOpts.forEach(function(o){ selHtml += '<option value="'+o[0]+'">'+o[1]+'</option>'; });
+    selHtml += '</select>';
+
     var addForm = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA;margin-bottom:16px">' +
       '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">ADD MEMORY</div>' +
-      '<div style="display:flex;gap:8px;margin-bottom:8px">' +
-        '<select id="mem-cat" style="flex:0 0 160px">' +
-          '<option value="what_worked">What Worked</option>' +
-          '<option value="what_didnt">What Didn't</option>' +
-          '<option value="speaker_insight">Speaker Insight</option>' +
-          '<option value="topic_trend">Topic Trend</option>' +
-          '<option value="audience_signal">Audience Signal</option>' +
-          '<option value="kpi_outcome">KPI Outcome</option>' +
-        '</select>' +
-        '<input id="mem-content" placeholder="Enter memory..." style="flex:1">' +
-        '<button class="btn-primary" onclick="addMemory()">Add</button>' +
-      '</div>' +
-    '</div>';
+      '<div style="display:flex;gap:8px;margin-bottom:8px">' + selHtml +
+      '<input id="mem-content" placeholder="Enter memory..." style="flex:1">' +
+      '<button class="btn-primary" id="btn-add-mem">Add</button></div></div>';
 
     if (memories.length === 0) {
       el.innerHTML = addForm + '<p style="color:#666;padding:16px 0">No memories yet. Import survey data or add manually.</p>';
+      var ab = document.getElementById('btn-add-mem'); if(ab) ab.onclick = addMemory;
       return;
     }
 
-    var categories = ['what_worked','what_didnt','speaker_insight','topic_trend','audience_signal','kpi_outcome','manual','auto_extracted'];
     var catColors = { what_worked:'#007A3D', what_didnt:'#CC0000', speaker_insight:'#000864', topic_trend:'#00AAE8', audience_signal:'#B8860B', kpi_outcome:'#2E2F2F', manual:'#6B6B6B', auto_extracted:'#000864' };
-
-    var html = addForm;
-    html += '<div style="margin-bottom:8px;font-size:12px;color:#666">' + memories.length + ' memories · sorted by signal strength</div>';
+    var html = addForm + '<div style="margin-bottom:8px;font-size:12px;color:#666">' + memories.length + ' memories</div>';
 
     memories.forEach(function(m) {
       var catColor = catColors[m.category] || '#6B6B6B';
       var signalPct = Math.round((m.signal_strength / 3.0) * 100);
       html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px">' +
-        '<span style="background:' + catColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;white-space:nowrap;margin-top:2px">' + (m.category||'').replace(/_/g,' ').toUpperCase() + '</span>' +
-        '<div style="flex:1;font-size:13px;color:#2E2F2F">' + escHtml(m.content) + '</div>' +
+        '<span style="background:'+catColor+';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;white-space:nowrap;margin-top:2px">'+(m.category||'').replace(/_/g,' ').toUpperCase()+'</span>' +
+        '<div style="flex:1;font-size:13px;color:#2E2F2F">'+escHtml(m.content)+'</div>' +
         '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:80px">' +
           '<div style="font-size:10px;color:#666">Signal</div>' +
-          '<div style="background:#EAEAEA;width:60px;height:6px;position:relative">' +
-            '<div style="background:#00AAE8;width:' + signalPct + '%;height:100%"></div>' +
-          '</div>' +
+          '<div style="background:#EAEAEA;width:60px;height:6px"><div style="background:#00AAE8;width:'+signalPct+'%;height:100%"></div></div>' +
           '<div style="display:flex;gap:4px">' +
-            '<button onclick="signalMemory(' + m.id + ','up')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">▲</button>' +
-            '<button onclick="signalMemory(' + m.id + ','down')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">▼</button>' +
-            '<button onclick="deleteMemory(' + m.id + ')" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px;color:#CC0000">✕</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
+            '<button data-mid="'+m.id+'" data-dir="up" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9650;</button>' +
+            '<button data-mid="'+m.id+'" data-dir="down" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9660;</button>' +
+            '<button data-mid="'+m.id+'" data-action="delete" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px;color:#CC0000">&#10005;</button>' +
+          '</div></div></div>';
     });
+
     el.innerHTML = html;
+    var ab = document.getElementById('btn-add-mem'); if(ab) ab.onclick = addMemory;
+    el.querySelectorAll('[data-mid]').forEach(function(btn){
+      btn.onclick = function(){
+        var mid = parseInt(this.getAttribute('data-mid'));
+        var dir = this.getAttribute('data-dir');
+        var action = this.getAttribute('data-action');
+        if (action === 'delete') deleteMemory(mid);
+        else if (dir) signalMemory(mid, dir);
+      };
+    });
 
   } else if (memoryTab === 'survey') {
     el.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA">' +
       '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">IMPORT POST-EVENT SURVEY</div>' +
-      '<p style="font-size:13px;color:#666;margin-bottom:16px">Upload a CSV export from your post-event survey platform (Evolio, Cvent, etc.). Column headers are auto-detected and mapped to Intel KPI fields. Session titles are fuzzy-matched to submission records.</p>' +
-      '<div style="margin-bottom:12px">' +
-        '<label style="font-weight:700;font-size:12px">Survey CSV File</label>' +
-        '<input type="file" id="survey-file" accept=".csv" style="display:block;margin-top:6px">' +
-      '</div>' +
-      '<button class="btn-primary" onclick="importSurvey()">Import Survey Data</button>' +
+      '<p style="font-size:13px;color:#666;margin-bottom:16px">Upload a CSV export from your post-event survey platform. Column headers are auto-detected and mapped to Intel KPI fields.</p>' +
+      '<div style="margin-bottom:12px"><label style="font-weight:700;font-size:12px">Survey CSV File</label>' +
+      '<input type="file" id="survey-file" accept=".csv" style="display:block;margin-top:6px"></div>' +
+      '<button class="btn-primary" id="btn-import-survey">Import Survey Data</button>' +
       '<div id="survey-import-result" style="margin-top:12px"></div>' +
       '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #EAEAEA">' +
         '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px">EXTRACT LESSONS FROM SURVEY</div>' +
-        '<p style="font-size:13px;color:#666;margin-bottom:12px">After importing survey data, run AI lesson extraction to automatically generate memory entries from the results.</p>' +
-        '<button class="btn-secondary" onclick="extractLessons()">Extract Lessons with AI</button>' +
+        '<p style="font-size:13px;color:#666;margin-bottom:12px">After importing, run AI lesson extraction to auto-generate memory entries.</p>' +
+        '<button class="btn-secondary" id="btn-extract-lessons">Extract Lessons with AI</button>' +
         '<div id="lesson-extract-result" style="margin-top:8px"></div>' +
-      '</div>' +
-      '<div id="survey-stats-container" style="margin-top:20px"></div>' +
-    '</div>';
+      '</div><div id="survey-stats-container" style="margin-top:20px"></div></div>';
+    var ib = document.getElementById('btn-import-survey'); if(ib) ib.onclick = importSurvey;
+    var eb = document.getElementById('btn-extract-lessons'); if(eb) eb.onclick = extractLessons;
     loadSurveyStats();
 
   } else if (memoryTab === 'speakers') {
-    var data = await api('GET', '/api/speakers?event_id=' + currentEventId);
-    var speakers = (data.speakers || []).filter(function(s) { return s.full_name; });
-    if (speakers.length === 0) {
-      el.innerHTML = '<p style="color:#666;padding:16px 0">No speaker history available yet. Speaker performance data is auto-populated from survey imports.</p>';
-      return;
-    }
-    var html = '<div style="font-size:12px;color:#666;margin-bottom:12px">Speaker performance data sourced from post-event surveys.</div>';
-    speakers.forEach(function(sp) {
+    var sdata = await api('GET', '/api/speakers?event_id=' + currentEventId);
+    var speakers = (sdata.speakers || []).filter(function(s){return s.full_name;});
+    if (speakers.length === 0) { el.innerHTML = '<p style="color:#666;padding:16px 0">No speaker history yet.</p>'; return; }
+    var html = '<div style="font-size:12px;color:#666;margin-bottom:12px">Speaker performance sourced from post-event surveys.</div>';
+    speakers.forEach(function(sp){
       html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:center;gap:16px">' +
-        '<div style="font-weight:700;font-size:14px;flex:1">' + escHtml(sp.full_name) + '</div>' +
-        '<div style="font-size:12px;color:#666">' + (sp.title||'') + (sp.company ? ' · ' + sp.company : '') + '</div>' +
-      '</div>';
+        '<div style="font-weight:700;font-size:14px;flex:1">'+escHtml(sp.full_name)+'</div>' +
+        '<div style="font-size:12px;color:#666">'+(sp.title||'')+(sp.company?' &middot; '+sp.company:'')+'</div></div>';
     });
     el.innerHTML = html;
   }
 }
 
 async function addMemory() {
-  var cat = document.getElementById('mem-cat').value;
-  var content = document.getElementById('mem-content').value.trim();
-  if (!content) return;
-  var r = await api('POST', '/api/events/' + currentEventId + '/memories', { category: cat, content: content });
-  if (r.ok) { document.getElementById('mem-content').value = ''; renderMemoryTab(); }
+  var cat = document.getElementById('mem-cat'); if(!cat) return;
+  var inp = document.getElementById('mem-content'); if(!inp) return;
+  var val = inp.value.trim(); if (!val) return;
+  var r = await api('POST', '/api/events/' + currentEventId + '/memories', { category: cat.value, content: val });
+  if (r.ok) { inp.value = ''; renderMemoryTab(); }
   else alert(r.error || 'Failed to add memory');
 }
 
@@ -1490,35 +1482,33 @@ async function deleteMemory(id) {
 }
 
 async function importSurvey() {
-  var file = document.getElementById('survey-file').files[0];
-  if (!file) { alert('Please select a CSV file'); return; }
+  var file = document.getElementById('survey-file');
+  if (!file || !file.files[0]) { alert('Please select a CSV file'); return; }
   var el = document.getElementById('survey-import-result');
   el.innerHTML = '<div style="color:#666;font-size:13px">Importing...</div>';
   var form = new FormData();
-  form.append('survey', file);
+  form.append('survey', file.files[0]);
   try {
     var r = await fetch('/api/events/' + currentEventId + '/memories/import-survey', { method: 'POST', body: form });
-    var data = await r.json();
-    if (data.ok) {
-      el.innerHTML = '<div style="color:#007A3D;font-weight:700">✓ Imported ' + data.imported + ' responses (' + data.skipped + ' skipped). ' + data.total_rows + ' total rows processed.</div>';
+    var d = await r.json();
+    if (d.ok) {
+      el.innerHTML = '<div style="color:#007A3D;font-weight:700">&#10003; Imported ' + d.imported + ' responses (' + d.skipped + ' skipped).</div>';
       loadSurveyStats();
     } else {
-      el.innerHTML = '<div style="color:#CC0000">' + (data.error || 'Import failed') + '</div>';
+      el.innerHTML = '<div style="color:#CC0000">' + (d.error||'Import failed') + '</div>';
     }
-  } catch(e) {
-    el.innerHTML = '<div style="color:#CC0000">Error: ' + e.message + '</div>';
-  }
+  } catch(e) { el.innerHTML = '<div style="color:#CC0000">Error: ' + e.message + '</div>'; }
 }
 
 async function extractLessons() {
   var el = document.getElementById('lesson-extract-result');
-  el.innerHTML = '<div style="color:#666;font-size:13px">Extracting lessons with AI...</div>';
+  el.innerHTML = '<div style="color:#666;font-size:13px">Extracting lessons...</div>';
   var r = await api('POST', '/api/events/' + currentEventId + '/memories/extract-lessons');
   if (r.ok) {
-    el.innerHTML = '<div style="color:#007A3D;font-weight:700">✓ Extracted ' + r.lessons_extracted + ' lessons and stored in memory brain.</div>';
-    if (memoryTab === 'survey') setTimeout(function() { switchMemoryTab('browse'); }, 1500);
+    el.innerHTML = '<div style="color:#007A3D;font-weight:700">&#10003; Extracted ' + r.lessons_extracted + ' lessons.</div>';
+    if (memoryTab === 'survey') setTimeout(function(){switchMemoryTab('browse');}, 1500);
   } else {
-    el.innerHTML = '<div style="color:#CC0000">' + (r.error || 'Extraction failed') + '</div>';
+    el.innerHTML = '<div style="color:#CC0000">' + (r.error||'Extraction failed') + '</div>';
   }
 }
 
@@ -1531,24 +1521,28 @@ async function loadSurveyStats() {
     return;
   }
   var s = data.summary;
-  var kpiTargets = { avg_satisfaction: { label: 'Avg Session Satisfaction', target: 4.0, max: 5 }, avg_relevance: { label: 'Avg Business Relevance', target: 3.75, max: 5 }, avg_speaker_quality: { label: 'Avg Speaker Quality', target: 4.0, max: 5 }, avg_nps: { label: 'Avg NPS', target: 7.5, max: 10 }, pct_high_value: { label: '% High Event Value', target: 80, max: 100 }, pct_partner_lift: { label: '% Partner Select Lift', target: 75, max: 100 } };
-  var html = '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">SURVEY RESULTS — ' + s.total_responses + ' RESPONSES</div>';
-  Object.keys(kpiTargets).forEach(function(k) {
-    var kpi = kpiTargets[k];
-    var val = parseFloat(s[k]) || 0;
-    var pct = Math.round((val / kpi.max) * 100);
-    var targetPct = Math.round((kpi.target / kpi.max) * 100);
+  var kpis = [
+    {key:'avg_satisfaction',label:'Avg Session Satisfaction',target:4.0,max:5},
+    {key:'avg_relevance',label:'Avg Business Relevance',target:3.75,max:5},
+    {key:'avg_speaker_quality',label:'Avg Speaker Quality',target:4.0,max:5},
+    {key:'avg_nps',label:'Avg NPS',target:7.5,max:10},
+    {key:'pct_high_value',label:'% High Event Value',target:80,max:100},
+    {key:'pct_partner_lift',label:'% Partner Select Lift',target:75,max:100}
+  ];
+  var html = '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">SURVEY RESULTS &mdash; ' + s.total_responses + ' RESPONSES</div>';
+  kpis.forEach(function(kpi){
+    var val = parseFloat(s[kpi.key])||0;
+    var pct = Math.round((val/kpi.max)*100);
+    var tpct = Math.round((kpi.target/kpi.max)*100);
     var color = val >= kpi.target ? '#007A3D' : '#CC0000';
     html += '<div style="margin-bottom:10px">' +
       '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">' +
-        '<span>' + kpi.label + '</span>' +
-        '<span style="font-weight:700;color:' + color + '">' + val + ' <span style="color:#666;font-weight:400">/ target ' + kpi.target + '</span></span>' +
+        '<span>'+kpi.label+'</span><span style="font-weight:700;color:'+color+'">'+val+' <span style="color:#666;font-weight:400">/ target '+kpi.target+'</span></span>' +
       '</div>' +
       '<div style="background:#EAEAEA;height:8px;position:relative">' +
-        '<div style="background:' + color + ';width:' + pct + '%;height:100%"></div>' +
-        '<div style="position:absolute;top:0;left:' + targetPct + '%;width:2px;height:100%;background:#2E2F2F"></div>' +
-      '</div>' +
-    '</div>';
+        '<div style="background:'+color+';width:'+pct+'%;height:100%"></div>' +
+        '<div style="position:absolute;top:0;left:'+tpct+'%;width:2px;height:100%;background:#2E2F2F"></div>' +
+      '</div></div>';
   });
   el.innerHTML = '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA">' + html + '</div>';
 }
