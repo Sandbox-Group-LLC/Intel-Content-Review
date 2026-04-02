@@ -2235,7 +2235,7 @@ function buildCFPPortalPage(inv, token) {
 
   // Welcome card
   html += '<div class="card">' +
-    '<h2>Hi ' + escHtmlServer(speakerName) + ' &#128075;</h2>' +
+    '<h2>Hi ' + escHtmlServer(speakerName) + '</h2>' +
     '<p style="font-size:14px;color:#444;margin-bottom:8px">' + (hasSubmission ? 'Review and update your submission below.' : 'Submit your session proposal for <strong>' + escHtmlServer(eventName) + '</strong> using the form below, or upload your completed one-page template.') + '</p>' +
     (deadline ? '<p style="font-size:13px;color:#CC0000;font-weight:700">' + escHtmlServer(deadline) + '</p>' : '') +
   '</div>';
