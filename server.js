@@ -528,6 +528,16 @@ app.get('/api/assets/:filename', async function (req, res) {
   }
 });
 
+// ─── FAVICON ─────────────────────────────────────────────────────────────────
+app.get('/favicon.png', function(req, res) {
+  var buf = Buffer.from('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', 'base64');
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=604800');
+  res.send(buf);
+});
+
+app.get('/favicon.ico', function(req, res) { res.redirect('/favicon.png'); });
+
 // ─── EVENTS API ───────────────────────────────────────────────────────────────
 
 app.get('/api/events', async function (req, res) {
