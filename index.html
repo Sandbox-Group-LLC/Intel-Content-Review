@@ -1376,23 +1376,31 @@ window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
 // ─── COMPETITIVE INTELLIGENCE UI ─────────────────────────────────────────────
 
+var _competitivePollInterval = null;
+
 async function renderCompetitive() {
   var el = document.getElementById('competitive-content');
+  if (!el) return;
   if (!currentEventId) {
     el.innerHTML = '<p style="color:#666;padding:24px">Select an event to run competitive intelligence.</p>';
     return;
   }
-
-  // Check for existing results
-  var data = await api('GET', '/api/events/' + currentEventId + '/competitive');
-  if (!data.ok || !data.pillars || data.pillars.length === 0) {
-    el.innerHTML = buildCompetitiveLaunchScreen();
-    var runBtn = document.getElementById('btn-run-competitive');
-    if (runBtn) runBtn.onclick = runCompetitivePipeline;
-    return;
+  el.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">Loading competitive intelligence...</div>';
+  try {
+    var data = await api('GET', '/api/events/' + currentEventId + '/competitive');
+    if (!data.ok || !data.pillars || data.pillars.length === 0) {
+      el.innerHTML = buildCompetitiveLaunchScreen();
+      var runBtn = document.getElementById('btn-run-competitive');
+      if (runBtn) runBtn.onclick = runCompetitivePipeline;
+      return;
+    }
+    renderCompetitiveResults(data, el);
+  } catch(err) {
+    el.innerHTML = '<div style="padding:16px;color:#CC0000;font-size:13px">Error: ' + escHtml(err.message || String(err)) + '</div>' +
+      '<div style="padding:0 16px 16px"><button class="btn-secondary" id="btn-ci-retry">Retry</button></div>';
+    var retryBtn = document.getElementById('btn-ci-retry');
+    if (retryBtn) retryBtn.onclick = renderCompetitive;
   }
-
-  renderCompetitiveResults(data, el);
 }
 
 function buildCompetitiveLaunchScreen() {
@@ -1418,107 +1426,99 @@ function buildCompetitiveLaunchScreen() {
       '</div>' +
     '</div>' +
     '<button class="btn-primary" id="btn-run-competitive" style="font-size:14px;padding:14px 32px">Run Competitive Analysis</button>' +
-    '<p style="font-size:11px;color:#666;margin-top:12px">Pipeline runs in the background. Refresh after 1-2 minutes to see results.</p>' +
+    '<p style="font-size:11px;color:#666;margin-top:12px">Pipeline runs in the background. Auto-refreshes when complete.</p>' +
   '</div>';
 }
 
-var _competitivePollInterval = null;
-
 async function runCompetitivePipeline() {
   var btn = document.getElementById('btn-run-competitive');
-  if (btn) { btn.disabled = true; btn.textContent = 'Pipeline running...'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
   var r = await api('POST', '/api/events/' + currentEventId + '/competitive/run');
   if (r.ok) {
-    var pillars = r.pillars || [];
-    showCompetitivePipelineStatus(pillars, 0);
-    startCompetitivePolling(pillars);
+    startCompetitivePolling(r.pillars || []);
   } else {
     alert('Error: ' + (r.error || 'Pipeline failed to start'));
     if (btn) { btn.disabled = false; btn.textContent = 'Run Competitive Analysis'; }
   }
 }
 
-function showCompetitivePipelineStatus(pillars, elapsedSeconds) {
-  var el = document.getElementById('competitive-content');
-  if (!el) return;
-  var stages = [
-    { label: 'Stage 1 — Perplexity Sonar', desc: 'Live competitive research per pillar', active: elapsedSeconds < 30 },
-    { label: 'Stage 2 — Claude Sonnet', desc: 'Owned / Contested / Unclaimed classification', active: elapsedSeconds >= 20 && elapsedSeconds < 80 },
-    { label: 'Stage 3 — Claude Haiku', desc: 'Title saturation + reframe suggestions', active: elapsedSeconds >= 60 }
-  ];
-  var stageHtml = stages.map(function(s) {
-    var color = s.active ? '#00AAE8' : '#EAEAEA';
-    var textColor = s.active ? '#000864' : '#999';
-    return '<div style="display:flex;align-items:center;gap:12px;padding:10px;border:1px solid ' + color + ';background:' + (s.active ? '#EEF6FB' : '#fff') + ';margin-bottom:6px">' +
-      '<div style="width:10px;height:10px;background:' + color + ';flex-shrink:0' + (s.active ? ';animation:pulse 1s infinite' : '') + '"></div>' +
-      '<div><div style="font-weight:700;font-size:13px;color:' + textColor + '">' + s.label + '</div>' +
-      '<div style="font-size:12px;color:#666">' + s.desc + '</div></div>' +
-    '</div>';
-  }).join('');
-
-  el.innerHTML = '<div style="max-width:560px;margin:40px auto">' +
-    '<div style="text-align:center;margin-bottom:24px">' +
-      '<div style="font-size:36px;margin-bottom:12px">&#9881;</div>' +
-      '<h2 style="font-size:20px;font-weight:700;color:#000864;margin-bottom:6px">Pipeline Running</h2>' +
-      '<p style="font-size:13px;color:#666">Analyzing: ' + pillars.join(' &middot; ') + '</p>' +
-    '</div>' +
-    stageHtml +
-    '<div style="margin-top:16px;text-align:center">' +
-      '<div style="background:#EAEAEA;height:4px;position:relative;margin-bottom:8px">' +
-        '<div id="pipeline-progress-bar" style="background:#00AAE8;height:100%;width:' + Math.min(elapsedSeconds / 120 * 100, 95) + '%;transition:width 1s linear"></div>' +
-      '</div>' +
-      '<span style="font-size:12px;color:#666" id="pipeline-elapsed">Elapsed: ' + elapsedSeconds + 's — auto-refreshing when complete</span>' +
-    '</div>' +
-  '</div>' +
-  '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}</style>';
-}
-
 function startCompetitivePolling(pillars) {
   if (_competitivePollInterval) clearInterval(_competitivePollInterval);
   var startTime = Date.now();
   var checkCount = 0;
+  showPipelineStatus(pillars, 0);
 
   _competitivePollInterval = setInterval(async function() {
     checkCount++;
     var elapsed = Math.round((Date.now() - startTime) / 1000);
+    showPipelineStatus(pillars, elapsed);
 
-    // Update progress display
-    showCompetitivePipelineStatus(pillars, elapsed);
-
-    // Poll for results
     try {
       var data = await api('GET', '/api/events/' + currentEventId + '/competitive');
       if (data.ok && data.pillars && data.pillars.length > 0) {
-        // Results arrived — stop polling and render
         clearInterval(_competitivePollInterval);
         _competitivePollInterval = null;
         var el = document.getElementById('competitive-content');
         if (el) renderCompetitiveResults(data, el);
+        return;
       }
-    } catch(e) { /* keep polling */ }
+    } catch(e) {}
 
-    // Safety cutoff after 3 minutes (18 checks at 10s)
     if (checkCount >= 18) {
       clearInterval(_competitivePollInterval);
       _competitivePollInterval = null;
       var el = document.getElementById('competitive-content');
       if (el) {
-        el.innerHTML += '<div style="text-align:center;padding:16px;color:#666;font-size:13px">Pipeline is taking longer than expected. <a href="#" id="manual-refresh-competitive" style="color:#00AAE8">Refresh manually</a></div>';
-        var mr = document.getElementById('manual-refresh-competitive');
-        if (mr) mr.onclick = function(e) { e.preventDefault(); renderCompetitive(); };
+        el.innerHTML += '<div style="text-align:center;padding:16px;color:#666;font-size:13px">Taking longer than expected. ' +
+          '<button class="btn-secondary" id="btn-ci-manual-refresh" style="font-size:11px">Refresh now</button></div>';
+        var mr = document.getElementById('btn-ci-manual-refresh');
+        if (mr) mr.onclick = renderCompetitive;
       }
     }
-  }, 10000); // Poll every 10 seconds
+  }, 10000);
+}
+
+function showPipelineStatus(pillars, elapsedSeconds) {
+  var el = document.getElementById('competitive-content');
+  if (!el) return;
+  var stages = [
+    { label: 'Stage 1 — Perplexity Sonar', desc: 'Live competitive research per pillar', active: elapsedSeconds < 35 },
+    { label: 'Stage 2 — Claude Sonnet', desc: 'Owned / Contested / Unclaimed classification', active: elapsedSeconds >= 25 && elapsedSeconds < 90 },
+    { label: 'Stage 3 — Claude Haiku', desc: 'Title saturation + reframe suggestions', active: elapsedSeconds >= 70 }
+  ];
+  var stageHtml = stages.map(function(s) {
+    var color = s.active ? '#00AAE8' : '#EAEAEA';
+    var textColor = s.active ? '#000864' : '#999';
+    return '<div style="display:flex;align-items:center;gap:12px;padding:10px;border:1px solid ' + color + ';background:' + (s.active ? '#EEF6FB' : '#fff') + ';margin-bottom:6px">' +
+      '<div style="width:10px;height:10px;background:' + color + ';flex-shrink:0"></div>' +
+      '<div><div style="font-weight:700;font-size:13px;color:' + textColor + '">' + s.label + '</div>' +
+      '<div style="font-size:12px;color:#666">' + s.desc + '</div></div>' +
+    '</div>';
+  }).join('');
+  var pct = Math.min(Math.round(elapsedSeconds / 120 * 100), 95);
+  el.innerHTML = '<div style="max-width:560px;margin:40px auto">' +
+    '<div style="text-align:center;margin-bottom:24px">' +
+      '<div style="font-size:36px;margin-bottom:12px">&#9881;</div>' +
+      '<h2 style="font-size:20px;font-weight:700;color:#000864;margin-bottom:6px">Pipeline Running</h2>' +
+      '<p style="font-size:13px;color:#666">Analyzing: ' + (pillars.join(' &middot; ') || 'event pillars') + '</p>' +
+    '</div>' +
+    stageHtml +
+    '<div style="margin-top:16px;text-align:center">' +
+      '<div style="background:#EAEAEA;height:4px;position:relative;margin-bottom:8px">' +
+        '<div style="background:#00AAE8;height:100%;width:' + pct + '%"></div>' +
+      '</div>' +
+      '<span style="font-size:12px;color:#666">' + elapsedSeconds + 's elapsed &mdash; auto-refreshing</span>' +
+    '</div>' +
+  '</div>';
 }
 
 function renderCompetitiveResults(data, el) {
   var ownershipColors = { owned: '#CC0000', contested: '#B8860B', unclaimed: '#007A3D' };
   var ownershipBg = { owned: '#FFF0F0', contested: '#FFF8EC', unclaimed: '#F0FAF5' };
   var urgencyColors = { high: '#CC0000', medium: '#B8860B', low: '#6B6B6B' };
-
   var html = '';
 
-  // Header with last run time + re-run button
+  // Header
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
     '<div>' +
       '<div style="font-size:12px;color:#666">Last run: ' + (data.last_run ? new Date(data.last_run).toLocaleString() : 'Unknown') + '</div>' +
@@ -1527,41 +1527,38 @@ function renderCompetitiveResults(data, el) {
     '<button class="btn-secondary" id="btn-rerun-competitive">Re-run Analysis</button>' +
   '</div>';
 
-  // ── Whitespace Report ──
+  // Whitespace Report
   if (data.whitespace_report && data.whitespace_report.length > 0) {
-    html += '<div style="background:#fff;border:1px solid #00AAE8;padding:16px;margin-bottom:16px">';
-    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#000864;margin-bottom:12px">&#9670; WHITESPACE OPPORTUNITIES — PLANT A FLAG</div>';
+    html += '<div style="background:#fff;border:1px solid #00AAE8;padding:16px;margin-bottom:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#000864;margin-bottom:12px">&#9670; WHITESPACE OPPORTUNITIES</div>';
     data.whitespace_report.forEach(function(w) {
       html += '<div style="padding:10px 12px;background:#EEF6FB;border-left:3px solid #00AAE8;margin-bottom:8px">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">' +
           '<span style="font-weight:700;font-size:13px">' + escHtml(w.cluster || '') + '</span>' +
-          '<span style="font-size:11px;color:#00AAE8;font-weight:700;background:#fff;padding:2px 8px;border:1px solid #00AAE8">' + (w.pillar || '') + '</span>' +
+          '<span style="font-size:11px;color:#00AAE8;font-weight:700;background:#fff;padding:2px 8px;border:1px solid #00AAE8">' + escHtml(w.pillar || '') + '</span>' +
         '</div>' +
         '<div style="font-size:12px;color:#666;margin-bottom:4px">Claim window: ' + escHtml(w.estimatedClaimWindow || 'TBD') + '</div>' +
-        '<div style="font-size:12px;color:#2E2F2F">' + escHtml(w.ownItStrategy || '') + '</div>' +
+        '<div style="font-size:12px">' + escHtml(w.ownItStrategy || '') + '</div>' +
       '</div>';
     });
     html += '</div>';
   }
 
-  // ── Per-pillar results ──
+  // Per-pillar results
   (data.pillars || []).forEach(function(pillarResult) {
     var ga = pillarResult.gap_analysis;
-    if (typeof ga === 'string') { try { ga = JSON.parse(ga); } catch(e) { ga = null; } }
+    if (ga && typeof ga === 'string') { try { ga = JSON.parse(ga); } catch(e) { ga = null; } }
     if (!ga) return;
-
     var ms = ga.marketSnapshot || {};
-    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
-      '<div style="font-weight:700;font-size:14px;color:#000864">' + escHtml(pillarResult.pillar || '') + '</div>' +
-      '<div style="display:flex;gap:8px;font-size:11px">' +
-        '<span style="background:#CC0000;color:#fff;padding:2px 8px;font-weight:700">OWNED: ' + (ms.owned || 0) + '</span>' +
-        '<span style="background:#B8860B;color:#fff;padding:2px 8px;font-weight:700">CONTESTED: ' + (ms.contested || 0) + '</span>' +
-        '<span style="background:#007A3D;color:#fff;padding:2px 8px;font-weight:700">UNCLAIMED: ' + (ms.unclaimed || 0) + '</span>' +
-      '</div>' +
-    '</div>';
-
-    // Topic cards
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<div style="font-weight:700;font-size:14px;color:#000864">' + escHtml(pillarResult.pillar || '') + '</div>' +
+        '<div style="display:flex;gap:8px;font-size:11px">' +
+          '<span style="background:#CC0000;color:#fff;padding:2px 8px;font-weight:700">OWNED: ' + (ms.owned || 0) + '</span>' +
+          '<span style="background:#B8860B;color:#fff;padding:2px 8px;font-weight:700">CONTESTED: ' + (ms.contested || 0) + '</span>' +
+          '<span style="background:#007A3D;color:#fff;padding:2px 8px;font-weight:700">UNCLAIMED: ' + (ms.unclaimed || 0) + '</span>' +
+        '</div>' +
+      '</div>';
     if (ga.topics && ga.topics.length > 0) {
       ga.topics.forEach(function(t) {
         var status = t.ownershipStatus || 'contested';
@@ -1574,65 +1571,51 @@ function renderCompetitiveResults(data, el) {
               (t.urgency ? '<span style="font-size:10px;font-weight:700;color:' + (urgencyColors[t.urgency] || '#6B6B6B') + '">' + t.urgency.toUpperCase() + ' URGENCY</span>' : '') +
               '<span style="background:' + bColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px">' + status.toUpperCase() + ' (' + (t.confidence || 0) + ')</span>' +
             '</div>' +
-          '</div>';
-        if (t.ownedBy && t.ownedBy.length > 0) {
-          html += '<div style="font-size:11px;color:#666;margin-bottom:4px">Owned by: ' + t.ownedBy.join(', ') + '</div>';
-        }
-        if (t.entryAngle) {
-          html += '<div style="font-size:12px;color:#2E2F2F;margin-bottom:4px"><strong>Intel angle:</strong> ' + escHtml(t.entryAngle) + '</div>';
-        }
-        if (t.suggestedSessionTitle) {
-          html += '<div style="font-size:11px;color:#000864;font-weight:700;padding:4px 8px;background:#fff;border:1px solid #000864;display:inline-block">&#128273; ' + escHtml(t.suggestedSessionTitle) + '</div>';
-        }
-        html += '</div>';
+          '</div>' +
+          (t.ownedBy && t.ownedBy.length > 0 ? '<div style="font-size:11px;color:#666;margin-bottom:4px">Owned by: ' + t.ownedBy.join(', ') + '</div>' : '') +
+          (t.entryAngle ? '<div style="font-size:12px;margin-bottom:4px"><strong>Intel angle:</strong> ' + escHtml(t.entryAngle) + '</div>' : '') +
+          (t.suggestedSessionTitle ? '<div style="font-size:11px;color:#000864;font-weight:700;padding:4px 8px;background:#fff;border:1px solid #000864;display:inline-block">&#128273; ' + escHtml(t.suggestedSessionTitle) + '</div>' : '') +
+        '</div>';
       });
     }
-
-    // Competitor profiles
     if (ga.competitorProfiles && ga.competitorProfiles.length > 0) {
-      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #EAEAEA">';
-      html += '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;margin-bottom:8px">COMPETITOR PROFILES</div>';
-      ga.competitorProfiles.slice(0,3).forEach(function(cp) {
-        html += '<div style="font-size:12px;padding:6px 0;border-bottom:1px solid #f0f0f0">' +
-          '<strong>' + escHtml(cp.name || '') + '</strong>' +
-          (cp.attackAngle ? ' &mdash; <span style="color:#B8860B">' + escHtml(cp.attackAngle) + '</span>' : '') +
-        '</div>';
+      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #EAEAEA">' +
+        '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;margin-bottom:8px">COMPETITOR PROFILES</div>';
+      ga.competitorProfiles.slice(0, 3).forEach(function(cp) {
+        html += '<div style="font-size:12px;padding:6px 0;border-bottom:1px solid #f0f0f0"><strong>' + escHtml(cp.name || '') + '</strong>' +
+          (cp.attackAngle ? ' &mdash; <span style="color:#B8860B">' + escHtml(cp.attackAngle) + '</span>' : '') + '</div>';
       });
       html += '</div>';
     }
     html += '</div>';
   });
 
-  // ── Submission saturation table ──
+  // Submission saturation table
   if (data.submissions && data.submissions.length > 0) {
-    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
-    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">SUBMISSION TITLE SATURATION</div>';
-    html += '<div style="display:grid;grid-template-columns:1fr 80px 120px;gap:8px;font-size:11px;font-weight:700;color:#666;padding-bottom:6px;border-bottom:1px solid #EAEAEA;margin-bottom:8px">' +
-      '<div>Submission</div><div style="text-align:center">Saturation</div><div style="text-align:center">Action</div></div>';
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">SUBMISSION TITLE SATURATION</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 80px 120px;gap:8px;font-size:11px;font-weight:700;color:#666;padding-bottom:6px;border-bottom:1px solid #EAEAEA;margin-bottom:8px">' +
+        '<div>Submission</div><div style="text-align:center">Saturation</div><div style="text-align:center">Action</div></div>';
     data.submissions.forEach(function(s) {
       var sat = s.title_saturation_score || 0;
       var satColor = sat >= 70 ? '#CC0000' : sat >= 40 ? '#B8860B' : '#007A3D';
       var reframes = s.reframe_suggestions;
-      if (typeof reframes === 'string') { try { reframes = JSON.parse(reframes); } catch(e) { reframes = []; } }
+      if (reframes && typeof reframes === 'string') { try { reframes = JSON.parse(reframes); } catch(e) { reframes = []; } }
       html += '<div style="display:grid;grid-template-columns:1fr 80px 120px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #EAEAEA;font-size:12px">' +
-        '<div>' +
-          '<div style="font-weight:700">' + escHtml((s.title || '').slice(0,60)) + (s.title && s.title.length > 60 ? '...' : '') + '</div>' +
-          '<div style="font-size:11px;color:#666">' + (s.track || '') + ' &middot; ' + (s.bu || '') + '</div>' +
-        '</div>' +
+        '<div><div style="font-weight:700">' + escHtml((s.title || '').slice(0, 60)) + (s.title && s.title.length > 60 ? '...' : '') + '</div>' +
+          '<div style="font-size:11px;color:#666">' + escHtml(s.track || '') + ' &middot; ' + escHtml(s.bu || '') + '</div></div>' +
         '<div style="text-align:center"><span style="background:' + satColor + ';color:#fff;padding:2px 8px;font-size:11px;font-weight:700">' + sat + '</span></div>' +
         '<div style="text-align:center">' +
           (reframes && reframes.length > 0
             ? '<button data-sub-id="' + s.id + '" class="btn-secondary btn-view-reframe" style="font-size:11px;padding:4px 10px">View Reframes</button>'
             : '<button data-sub-id="' + s.id + '" class="btn-secondary btn-run-reframe" style="font-size:11px;padding:4px 10px">Reframe</button>') +
-        '</div>' +
-      '</div>';
-      // Show reframe suggestions inline if available
+        '</div></div>';
       if (reframes && reframes.length > 0) {
-        html += '<div id="reframe-' + s.id + '" style="display:none;grid-column:1/-1;padding:8px 0 8px 12px;background:#f9f9f9;border-left:3px solid #00AAE8;margin-bottom:6px">';
-        reframes.slice(0,3).forEach(function(r) {
-          html += '<div style="font-size:12px;margin-bottom:6px"><strong style="color:#000864">' + escHtml(r.title || '') + '</strong><br>' +
-            '<span style="color:#666">' + escHtml(r.angle || '') + '</span>' +
-            (r.ownership_potential ? ' <span style="color:' + (r.ownership_potential === 'high' ? '#007A3D' : '#B8860B') + ';font-weight:700;font-size:11px">' + r.ownership_potential.toUpperCase() + ' POTENTIAL</span>' : '') +
+        html += '<div id="reframe-' + s.id + '" style="display:none;grid-column:1/-1;padding:8px 12px;background:#f9f9f9;border-left:3px solid #00AAE8;margin-bottom:4px">';
+        reframes.slice(0, 3).forEach(function(rf) {
+          html += '<div style="font-size:12px;margin-bottom:6px"><strong style="color:#000864">' + escHtml(rf.title || '') + '</strong><br>' +
+            '<span style="color:#666">' + escHtml(rf.angle || '') + '</span>' +
+            (rf.ownership_potential ? ' <span style="color:' + (rf.ownership_potential === 'high' ? '#007A3D' : '#B8860B') + ';font-weight:700;font-size:11px">' + rf.ownership_potential.toUpperCase() + ' POTENTIAL</span>' : '') +
           '</div>';
         });
         html += '</div>';
@@ -1641,22 +1624,16 @@ function renderCompetitiveResults(data, el) {
     html += '</div>';
   }
 
-  try {
-    el.innerHTML = html;
-  } catch(renderErr) {
-    console.error('[renderCompetitiveResults] innerHTML set failed:', renderErr);
-    el.innerHTML = '<div style="padding:16px;color:#CC0000;font-size:13px">Render error — check console</div>';
-    return;
-  }
+  el.innerHTML = html;
 
-  // Wire up buttons
+  // Wire up buttons after innerHTML is set
   var rerunBtn = document.getElementById('btn-rerun-competitive');
   if (rerunBtn) rerunBtn.onclick = function() {
-    document.getElementById('competitive-content').innerHTML = buildCompetitiveLaunchScreen();
+    var el2 = document.getElementById('competitive-content');
+    if (el2) { el2.innerHTML = buildCompetitiveLaunchScreen(); }
     var rb = document.getElementById('btn-run-competitive');
     if (rb) rb.onclick = runCompetitivePipeline;
   };
-
   el.querySelectorAll('.btn-view-reframe').forEach(function(btn) {
     btn.onclick = function() {
       var sid = this.getAttribute('data-sub-id');
@@ -1664,7 +1641,6 @@ function renderCompetitiveResults(data, el) {
       if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
     };
   });
-
   el.querySelectorAll('.btn-run-reframe').forEach(function(btn) {
     btn.onclick = async function() {
       var sid = this.getAttribute('data-sub-id');
