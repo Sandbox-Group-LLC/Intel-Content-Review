@@ -1529,6 +1529,260 @@ app.get('/submit/token/:token', async function(req, res) {
 });
 
 
+// ─── PHASE 4: PROGRAM INTELLIGENCE ──────────────────────────────────────────
+
+// GET program health dashboard for an event
+app.get('/api/events/:id/program-health', async function(req, res) {
+  try {
+    var sql = getDb();
+    var eventId = req.params.id;
+
+    // Get event info
+    var evtResult = await sql`SELECT * FROM events WHERE id = ${eventId}`;
+    if (!evtResult.length) return res.status(404).json({ ok: false, error: 'Event not found' });
+    var evt = evtResult[0];
+
+    // Get all submissions for this event
+    var subs = await sql`
+      SELECT id, title, track, bu, format, status, ai_score, disclosure_flag,
+             nda_required, demos, partner_highlights, content_lead,
+             version_number, score_delta
+      FROM submissions
+      WHERE event_id = ${eventId}
+    `;
+
+    // Gate status per submission
+    var gates = await sql`
+      SELECT submission_id, gate, level, score, blocking_fields
+      FROM submission_gates
+      WHERE submission_id = ANY(${subs.map(function(s){ return s.id; })})
+    `;
+    var gateMap = {};
+    gates.forEach(function(g) {
+      if (!gateMap[g.submission_id]) gateMap[g.submission_id] = {};
+      gateMap[g.submission_id][g.gate] = g;
+    });
+
+    // ── Track balance ──
+    var trackMap = {};
+    subs.forEach(function(s) {
+      var track = s.track || 'Unassigned';
+      if (!trackMap[track]) trackMap[track] = { submissions: 0, approved: 0, scores: [], hasDemo: 0, hasPartner: 0 };
+      trackMap[track].submissions++;
+      if (s.status === 'approved') trackMap[track].approved++;
+      if (s.ai_score) {
+        var sc = typeof s.ai_score === 'string' ? JSON.parse(s.ai_score) : s.ai_score;
+        var overall = sc.overall || sc.overall_score;
+        if (overall != null) trackMap[track].scores.push(parseInt(overall));
+      }
+      if (s.demos && s.demos.trim() && s.demos.toLowerCase() !== 'none' && s.demos.toLowerCase() !== 'tbd') trackMap[track].hasDemo++;
+      if (s.partner_highlights && s.partner_highlights.trim() && s.partner_highlights.toLowerCase() !== 'none') trackMap[track].hasPartner++;
+    });
+
+    var tracks = Object.keys(trackMap).map(function(t) {
+      var td = trackMap[t];
+      var avgScore = td.scores.length > 0 ? Math.round(td.scores.reduce(function(a,b){return a+b;},0) / td.scores.length) : null;
+      return {
+        track: t,
+        submissions: td.submissions,
+        approved: td.approved,
+        avg_score: avgScore,
+        scored: td.scores.length,
+        has_demo_pct: td.submissions > 0 ? Math.round((td.hasDemo / td.submissions) * 100) : 0,
+        has_partner_pct: td.submissions > 0 ? Math.round((td.hasPartner / td.submissions) * 100) : 0,
+        slot_fill_pct: evt.slot_count > 0 ? Math.round((td.submissions / Math.max(1, Math.round(evt.slot_count / Math.max(Object.keys(trackMap).length, 1)))) * 100) : 0
+      };
+    }).sort(function(a,b){ return b.submissions - a.submissions; });
+
+    // ── Score distribution histogram ──
+    var buckets = { '0-49': 0, '50-59': 0, '60-69': 0, '70-79': 0, '80-89': 0, '90-100': 0 };
+    var allScores = [];
+    subs.forEach(function(s) {
+      if (s.ai_score) {
+        var sc = typeof s.ai_score === 'string' ? JSON.parse(s.ai_score) : s.ai_score;
+        var overall = parseInt(sc.overall || sc.overall_score);
+        if (!isNaN(overall)) {
+          allScores.push(overall);
+          if (overall < 50) buckets['0-49']++;
+          else if (overall < 60) buckets['50-59']++;
+          else if (overall < 70) buckets['60-69']++;
+          else if (overall < 80) buckets['70-79']++;
+          else if (overall < 90) buckets['80-89']++;
+          else buckets['90-100']++;
+        }
+      }
+    });
+    var avgOverall = allScores.length > 0 ? Math.round(allScores.reduce(function(a,b){return a+b;},0) / allScores.length) : null;
+
+    // ── Gate readiness ──
+    var gateReadiness = { gate_50: { pass: 0, warn: 0, block: 0, total: 0 }, gate_75: { pass: 0, warn: 0, block: 0, total: 0 }, gate_90: { pass: 0, warn: 0, block: 0, total: 0 } };
+    subs.forEach(function(s) {
+      var sg = gateMap[s.id] || {};
+      ['gate_50', 'gate_75', 'gate_90'].forEach(function(g) {
+        gateReadiness[g].total++;
+        if (sg[g]) gateReadiness[g][sg[g].level || 'pass']++;
+        else gateReadiness[g].pass++; // unscored = pass (not yet evaluated)
+      });
+    });
+
+    // ── Status breakdown ──
+    var statusCounts = {};
+    subs.forEach(function(s) {
+      var st = s.status || 'submitted';
+      statusCounts[st] = (statusCounts[st] || 0) + 1;
+    });
+
+    // ── Speaker diversity ──
+    var intelOnly = 0, withPartner = 0, withCustomer = 0;
+    subs.forEach(function(s) {
+      var ph = (s.partner_highlights || '').toLowerCase();
+      var hasPartner = ph && ph !== 'none' && ph !== 'tbd' && ph.trim().length > 0;
+      if (hasPartner) withPartner++;
+      else intelOnly++;
+    });
+
+    // ── Compliance flags ──
+    var disclosureCount = subs.filter(function(s){ return s.disclosure_flag; }).length;
+    var ndaCount = subs.filter(function(s){ return s.nda_required; }).length;
+
+    // ── Score improvement trend (submissions with multiple versions) ──
+    var improving = subs.filter(function(s){ return s.score_delta && s.score_delta > 0; }).length;
+    var declining = subs.filter(function(s){ return s.score_delta && s.score_delta < 0; }).length;
+
+    res.json({
+      ok: true,
+      event: { id: evt.id, name: evt.name, slot_count: evt.slot_count, gate_50_deadline: evt.gate_50_deadline, gate_75_deadline: evt.gate_75_deadline, gate_90_deadline: evt.gate_90_deadline },
+      summary: {
+        total_submissions: subs.length,
+        scored: allScores.length,
+        avg_score: avgOverall,
+        approved: statusCounts['approved'] || 0,
+        slot_utilization: evt.slot_count > 0 ? Math.round((subs.length / evt.slot_count) * 100) : 0,
+        disclosure_flags: disclosureCount,
+        nda_flags: ndaCount,
+        improving_submissions: improving,
+        declining_submissions: declining
+      },
+      tracks: tracks,
+      score_distribution: buckets,
+      gate_readiness: gateReadiness,
+      status_breakdown: statusCounts,
+      speaker_diversity: { intel_only: intelOnly, with_partner: withPartner }
+    });
+  } catch(err) {
+    console.error('[api/program-health]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET cross-event trend intelligence
+app.get('/api/analytics/trends', async function(req, res) {
+  try {
+    var sql = getDb();
+
+    // Get all events with their submission stats
+    var events = await sql`SELECT * FROM events ORDER BY created_at ASC`;
+    if (events.length === 0) return res.json({ ok: true, events: [], insights: [] });
+
+    var eventStats = [];
+    for (var ei = 0; ei < events.length; ei++) {
+      var evt = events[ei];
+      var subs = await sql`SELECT ai_score, status, track, demos, partner_highlights FROM submissions WHERE event_id = ${evt.id}`;
+      var scores = [];
+      var trackCounts = {};
+      var demoCount = 0;
+      var partnerCount = 0;
+
+      subs.forEach(function(s) {
+        if (s.ai_score) {
+          var sc = typeof s.ai_score === 'string' ? JSON.parse(s.ai_score) : s.ai_score;
+          var overall = parseInt(sc.overall || sc.overall_score);
+          if (!isNaN(overall)) scores.push(overall);
+        }
+        var track = s.track || 'Unassigned';
+        trackCounts[track] = (trackCounts[track] || 0) + 1;
+        if (s.demos && s.demos.toLowerCase() !== 'none' && s.demos.toLowerCase() !== 'tbd') demoCount++;
+        if (s.partner_highlights && s.partner_highlights.toLowerCase() !== 'none') partnerCount++;
+      });
+
+      eventStats.push({
+        id: evt.id,
+        name: evt.name,
+        event_date: evt.event_date,
+        total_submissions: subs.length,
+        scored: scores.length,
+        avg_score: scores.length > 0 ? Math.round(scores.reduce(function(a,b){return a+b;},0) / scores.length) : null,
+        approved: subs.filter(function(s){ return s.status === 'approved'; }).length,
+        demo_pct: subs.length > 0 ? Math.round((demoCount / subs.length) * 100) : 0,
+        partner_pct: subs.length > 0 ? Math.round((partnerCount / subs.length) * 100) : 0,
+        top_tracks: Object.keys(trackCounts).sort(function(a,b){ return trackCounts[b]-trackCounts[a]; }).slice(0,3).map(function(t){ return { track: t, count: trackCounts[t] }; })
+      });
+    }
+
+    // Generate cross-event insights
+    var insights = [];
+    if (eventStats.length >= 2) {
+      var latest = eventStats[eventStats.length - 1];
+      var prev = eventStats[eventStats.length - 2];
+
+      if (latest.avg_score !== null && prev.avg_score !== null) {
+        var scoreDiff = latest.avg_score - prev.avg_score;
+        insights.push({
+          type: scoreDiff >= 0 ? 'positive' : 'negative',
+          metric: 'Average Score',
+          text: 'Average submission score is ' + (scoreDiff >= 0 ? '+' : '') + scoreDiff + ' points vs. ' + prev.name + ' (' + latest.avg_score + ' vs. ' + prev.avg_score + ')'
+        });
+      }
+
+      if (latest.demo_pct !== prev.demo_pct) {
+        insights.push({
+          type: latest.demo_pct > prev.demo_pct ? 'positive' : 'neutral',
+          metric: 'Demo Inclusion',
+          text: 'Demo inclusion rate is ' + latest.demo_pct + '% vs. ' + prev.demo_pct + '% in ' + prev.name
+        });
+      }
+
+      if (latest.partner_pct !== prev.partner_pct) {
+        insights.push({
+          type: latest.partner_pct > prev.partner_pct ? 'positive' : 'neutral',
+          metric: 'Partner Participation',
+          text: 'Partner participation rate is ' + latest.partner_pct + '% vs. ' + prev.partner_pct + '% in ' + prev.name
+        });
+      }
+
+      // Submission volume trend
+      var volDiff = latest.total_submissions - prev.total_submissions;
+      insights.push({
+        type: 'neutral',
+        metric: 'Submission Volume',
+        text: latest.total_submissions + ' submissions for ' + latest.name + ' (' + (volDiff >= 0 ? '+' : '') + volDiff + ' vs. ' + prev.name + ')'
+      });
+    } else {
+      insights.push({
+        type: 'info',
+        metric: 'Cross-Event Trends',
+        text: 'Trend intelligence becomes available after two or more events have submission data. Currently tracking ' + eventStats.length + ' event.'
+      });
+    }
+
+    // Pull relevant memories as insight cards
+    var memories = await sql`
+      SELECT em.id, em.category, em.content, em.signal_strength, e.name as event_name
+      FROM event_memories em
+      JOIN events e ON e.id = em.event_id
+      WHERE em.category IN ('what_worked', 'what_didnt', 'topic_trend', 'audience_signal')
+      ORDER BY em.signal_strength DESC, em.created_at DESC
+      LIMIT 8
+    `;
+
+    res.json({ ok: true, events: eventStats, insights: insights, memory_cards: memories });
+  } catch(err) {
+    console.error('[api/analytics/trends]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
 // ─── PHASE 2: MEMORY BRAIN API ──────────────────────────────────────────────
 
 // GET all memories for an event
