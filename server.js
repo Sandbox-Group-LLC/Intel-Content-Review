@@ -1730,7 +1730,7 @@ app.post('/api/events/:id/competitive/run', async function(req, res) {
               await sql`
                 UPDATE submissions SET
                   competitive_analysis = ${JSON.stringify({ pillar: pillar, gap_analysis_summary: (gapAnalysis || {}).marketSnapshot, reframe: reframe })},
-                  title_saturation_score = ${reframe.title_saturation_score || 0},
+                  title_saturation_score = ${Math.round(reframe.title_saturation_score || 0)},
                   reframe_suggestions = ${JSON.stringify(reframe.reframe_suggestions || [])}
                 WHERE id = ${sub.id}
               `;
@@ -1841,7 +1841,7 @@ app.post('/api/submissions/:id/competitive/reframe', async function(req, res) {
     await sql`
       UPDATE submissions SET
         competitive_analysis = ${JSON.stringify({ pillar: pillar, reframe: reframe })},
-        title_saturation_score = ${reframe.title_saturation_score || 0},
+        title_saturation_score = ${Math.round(reframe.title_saturation_score || 0)},
         reframe_suggestions = ${JSON.stringify(reframe.reframe_suggestions || [])}
       WHERE id = ${id}
     `;
