@@ -97,6 +97,7 @@ tr:hover td{background:#f9f9f9;}
     <a onclick="showSection('submissions')">Submissions</a>
     <a onclick="showSection('review')">Review</a>
     <a onclick="showSection('speakers')">Speakers</a>
+    <a onclick="showSection('competitive')">Intel</a>
     <a onclick="showSection('program')">Program</a>
     <a onclick="showSection('memory')">Memory</a>
   </nav>
@@ -126,6 +127,10 @@ tr:hover td{background:#f9f9f9;}
     <!-- SPEAKERS SECTION -->
     <div id="section-speakers" class="section">
       <div id="speakers-content"></div>
+    </div>
+    <!-- COMPETITIVE INTEL SECTION -->
+    <div id="section-competitive" class="section">
+      <div id="competitive-content"></div>
     </div>
     <!-- PROGRAM SECTION -->
     <div id="section-program" class="section">
@@ -158,7 +163,7 @@ function showSection(name) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.getElementById('section-' + name).classList.add('active');
   document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
-    a.classList.toggle('active', ['events','submissions','review','speakers','program','memory'][i] === name);
+    a.classList.toggle('active', ['events','submissions','review','speakers','competitive','program','memory'][i] === name);
   });
   document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
   document.getElementById('topbar-action').innerHTML = '';
@@ -166,6 +171,7 @@ function showSection(name) {
   if (name === 'submissions') { renderSubmissions(); }
   if (name === 'review') { renderReview(); }
   if (name === 'speakers') { renderSpeakers(); addTopbarBtn('Add Speaker', () => showSpeakerForm()); }
+  if (name === 'competitive') { renderCompetitive(); }
   if (name === 'program') { renderProgram(); }
   if (name === 'memory') { renderMemory(); }
 }
@@ -222,6 +228,7 @@ function onEventChange() {
   if (sect && sect.id === 'section-submissions') renderSubmissions();
   if (sect && sect.id === 'section-review') renderReview();
   if (sect && sect.id === 'section-speakers') renderSpeakers();
+  if (sect && sect.id === 'section-competitive') renderCompetitive();
   if (sect && sect.id === 'section-program') renderProgram();
   if (sect && sect.id === 'section-memory') renderMemory();
 }
@@ -1354,6 +1361,239 @@ window.showNewEventForm = showNewEventForm;
 window.switchPanelTab = switchPanelTab;
 window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
+// ─── COMPETITIVE INTELLIGENCE UI ─────────────────────────────────────────────
+
+async function renderCompetitive() {
+  var el = document.getElementById('competitive-content');
+  if (!currentEventId) {
+    el.innerHTML = '<p style="color:#666;padding:24px">Select an event to run competitive intelligence.</p>';
+    return;
+  }
+
+  // Check for existing results
+  var data = await api('GET', '/api/events/' + currentEventId + '/competitive');
+  if (!data.ok || !data.pillars || data.pillars.length === 0) {
+    el.innerHTML = buildCompetitiveLaunchScreen();
+    var runBtn = document.getElementById('btn-run-competitive');
+    if (runBtn) runBtn.onclick = runCompetitivePipeline;
+    return;
+  }
+
+  renderCompetitiveResults(data, el);
+}
+
+function buildCompetitiveLaunchScreen() {
+  return '<div style="max-width:600px;margin:48px auto;text-align:center">' +
+    '<div style="font-size:48px;margin-bottom:16px">&#128269;</div>' +
+    '<h2 style="font-size:22px;font-weight:700;color:#000864;margin-bottom:12px">Competitive Intelligence</h2>' +
+    '<p style="font-size:14px;color:#666;margin-bottom:8px">Run the 3-stage competitive analysis pipeline to discover where Intel owns, contests, or can claim unchallenged territory in the session topic space.</p>' +
+    '<div style="display:flex;justify-content:center;gap:24px;margin:24px 0;font-size:13px">' +
+      '<div style="text-align:center;padding:12px;border:1px solid #EAEAEA;background:#fff;width:160px">' +
+        '<div style="font-weight:700;color:#000864;margin-bottom:4px">Stage 1</div>' +
+        '<div style="font-size:11px;color:#00AAE8;font-weight:700;margin-bottom:4px">PERPLEXITY SONAR</div>' +
+        '<div style="font-size:11px;color:#666">Live competitive landscape per pillar</div>' +
+      '</div>' +
+      '<div style="text-align:center;padding:12px;border:1px solid #EAEAEA;background:#fff;width:160px">' +
+        '<div style="font-weight:700;color:#000864;margin-bottom:4px">Stage 2</div>' +
+        '<div style="font-size:11px;color:#00AAE8;font-weight:700;margin-bottom:4px">CLAUDE SONNET</div>' +
+        '<div style="font-size:11px;color:#666">Owned / Contested / Unclaimed classification</div>' +
+      '</div>' +
+      '<div style="text-align:center;padding:12px;border:1px solid #EAEAEA;background:#fff;width:160px">' +
+        '<div style="font-weight:700;color:#000864;margin-bottom:4px">Stage 3</div>' +
+        '<div style="font-size:11px;color:#00AAE8;font-weight:700;margin-bottom:4px">CLAUDE HAIKU</div>' +
+        '<div style="font-size:11px;color:#666">Title saturation + reframe suggestions</div>' +
+      '</div>' +
+    '</div>' +
+    '<button class="btn-primary" id="btn-run-competitive" style="font-size:14px;padding:14px 32px">Run Competitive Analysis</button>' +
+    '<p style="font-size:11px;color:#666;margin-top:12px">Pipeline runs in the background. Refresh after 1-2 minutes to see results.</p>' +
+  '</div>';
+}
+
+async function runCompetitivePipeline() {
+  var btn = document.getElementById('btn-run-competitive');
+  if (btn) { btn.disabled = true; btn.textContent = 'Pipeline running...'; }
+  var r = await api('POST', '/api/events/' + currentEventId + '/competitive/run');
+  if (r.ok) {
+    var el = document.getElementById('competitive-content');
+    el.innerHTML = '<div style="max-width:600px;margin:48px auto;text-align:center">' +
+      '<div style="font-size:40px;margin-bottom:16px">&#9881;</div>' +
+      '<h2 style="font-size:20px;font-weight:700;color:#000864;margin-bottom:8px">Pipeline Running</h2>' +
+      '<p style="font-size:14px;color:#666;margin-bottom:16px">Analyzing ' + (r.pillars || []).join(', ') + '</p>' +
+      '<p style="font-size:13px;color:#666">Stage 1: Perplexity Sonar researching each pillar...<br>Stage 2: Claude classifying topic ownership...<br>Stage 3: Haiku generating reframe suggestions...</p>' +
+      '<p style="font-size:12px;color:#00AAE8;margin-top:16px">Refresh in 1-2 minutes to see results.</p>' +
+    '</div>';
+  } else {
+    alert('Error: ' + (r.error || 'Pipeline failed to start'));
+    if (btn) { btn.disabled = false; btn.textContent = 'Run Competitive Analysis'; }
+  }
+}
+
+function renderCompetitiveResults(data, el) {
+  var ownershipColors = { owned: '#CC0000', contested: '#B8860B', unclaimed: '#007A3D' };
+  var ownershipBg = { owned: '#FFF0F0', contested: '#FFF8EC', unclaimed: '#F0FAF5' };
+  var urgencyColors = { high: '#CC0000', medium: '#B8860B', low: '#6B6B6B' };
+
+  var html = '';
+
+  // Header with last run time + re-run button
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
+    '<div>' +
+      '<div style="font-size:12px;color:#666">Last run: ' + (data.last_run ? new Date(data.last_run).toLocaleString() : 'Unknown') + '</div>' +
+      '<div style="font-size:12px;color:#666">' + (data.pillars || []).length + ' pillars analyzed &middot; ' + (data.submissions || []).length + ' submissions assessed</div>' +
+    '</div>' +
+    '<button class="btn-secondary" id="btn-rerun-competitive">Re-run Analysis</button>' +
+  '</div>';
+
+  // ── Whitespace Report ──
+  if (data.whitespace_report && data.whitespace_report.length > 0) {
+    html += '<div style="background:#fff;border:1px solid #00AAE8;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#000864;margin-bottom:12px">&#9670; WHITESPACE OPPORTUNITIES — PLANT A FLAG</div>';
+    data.whitespace_report.forEach(function(w) {
+      html += '<div style="padding:10px 12px;background:#EEF6FB;border-left:3px solid #00AAE8;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">' +
+          '<span style="font-weight:700;font-size:13px">' + escHtml(w.cluster || '') + '</span>' +
+          '<span style="font-size:11px;color:#00AAE8;font-weight:700;background:#fff;padding:2px 8px;border:1px solid #00AAE8">' + (w.pillar || '') + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:#666;margin-bottom:4px">Claim window: ' + escHtml(w.estimatedClaimWindow || 'TBD') + '</div>' +
+        '<div style="font-size:12px;color:#2E2F2F">' + escHtml(w.ownItStrategy || '') + '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+  }
+
+  // ── Per-pillar results ──
+  (data.pillars || []).forEach(function(pillarResult) {
+    var ga = pillarResult.gap_analysis;
+    if (typeof ga === 'string') { try { ga = JSON.parse(ga); } catch(e) { ga = null; } }
+    if (!ga) return;
+
+    var ms = ga.marketSnapshot || {};
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+      '<div style="font-weight:700;font-size:14px;color:#000864">' + escHtml(pillarResult.pillar || '') + '</div>' +
+      '<div style="display:flex;gap:8px;font-size:11px">' +
+        '<span style="background:#CC0000;color:#fff;padding:2px 8px;font-weight:700">OWNED: ' + (ms.owned || 0) + '</span>' +
+        '<span style="background:#B8860B;color:#fff;padding:2px 8px;font-weight:700">CONTESTED: ' + (ms.contested || 0) + '</span>' +
+        '<span style="background:#007A3D;color:#fff;padding:2px 8px;font-weight:700">UNCLAIMED: ' + (ms.unclaimed || 0) + '</span>' +
+      '</div>' +
+    '</div>';
+
+    // Topic cards
+    if (ga.topics && ga.topics.length > 0) {
+      ga.topics.forEach(function(t) {
+        var status = t.ownershipStatus || 'contested';
+        var bColor = ownershipColors[status] || '#6B6B6B';
+        var bgColor = ownershipBg[status] || '#f9f9f9';
+        html += '<div style="padding:10px 12px;background:' + bgColor + ';border-left:3px solid ' + bColor + ';margin-bottom:6px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">' +
+            '<span style="font-weight:700;font-size:13px">' + escHtml(t.topic || '') + '</span>' +
+            '<div style="display:flex;gap:6px;align-items:center">' +
+              (t.urgency ? '<span style="font-size:10px;font-weight:700;color:' + (urgencyColors[t.urgency] || '#6B6B6B') + '">' + t.urgency.toUpperCase() + ' URGENCY</span>' : '') +
+              '<span style="background:' + bColor + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px">' + status.toUpperCase() + ' (' + (t.confidence || 0) + ')</span>' +
+            '</div>' +
+          '</div>';
+        if (t.ownedBy && t.ownedBy.length > 0) {
+          html += '<div style="font-size:11px;color:#666;margin-bottom:4px">Owned by: ' + t.ownedBy.join(', ') + '</div>';
+        }
+        if (t.entryAngle) {
+          html += '<div style="font-size:12px;color:#2E2F2F;margin-bottom:4px"><strong>Intel angle:</strong> ' + escHtml(t.entryAngle) + '</div>';
+        }
+        if (t.suggestedSessionTitle) {
+          html += '<div style="font-size:11px;color:#000864;font-weight:700;padding:4px 8px;background:#fff;border:1px solid #000864;display:inline-block">&#128273; ' + escHtml(t.suggestedSessionTitle) + '</div>';
+        }
+        html += '</div>';
+      });
+    }
+
+    // Competitor profiles
+    if (ga.competitorProfiles && ga.competitorProfiles.length > 0) {
+      html += '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #EAEAEA">';
+      html += '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;margin-bottom:8px">COMPETITOR PROFILES</div>';
+      ga.competitorProfiles.slice(0,3).forEach(function(cp) {
+        html += '<div style="font-size:12px;padding:6px 0;border-bottom:1px solid #f0f0f0">' +
+          '<strong>' + escHtml(cp.name || '') + '</strong>' +
+          (cp.attackAngle ? ' &mdash; <span style="color:#B8860B">' + escHtml(cp.attackAngle) + '</span>' : '') +
+        '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+
+  // ── Submission saturation table ──
+  if (data.submissions && data.submissions.length > 0) {
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">SUBMISSION TITLE SATURATION</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 80px 120px;gap:8px;font-size:11px;font-weight:700;color:#666;padding-bottom:6px;border-bottom:1px solid #EAEAEA;margin-bottom:8px">' +
+      '<div>Submission</div><div style="text-align:center">Saturation</div><div style="text-align:center">Action</div></div>';
+    data.submissions.forEach(function(s) {
+      var sat = s.title_saturation_score || 0;
+      var satColor = sat >= 70 ? '#CC0000' : sat >= 40 ? '#B8860B' : '#007A3D';
+      var reframes = s.reframe_suggestions;
+      if (typeof reframes === 'string') { try { reframes = JSON.parse(reframes); } catch(e) { reframes = []; } }
+      html += '<div style="display:grid;grid-template-columns:1fr 80px 120px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #EAEAEA;font-size:12px">' +
+        '<div>' +
+          '<div style="font-weight:700">' + escHtml((s.title || '').slice(0,60)) + (s.title && s.title.length > 60 ? '...' : '') + '</div>' +
+          '<div style="font-size:11px;color:#666">' + (s.track || '') + ' &middot; ' + (s.bu || '') + '</div>' +
+        '</div>' +
+        '<div style="text-align:center"><span style="background:' + satColor + ';color:#fff;padding:2px 8px;font-size:11px;font-weight:700">' + sat + '</span></div>' +
+        '<div style="text-align:center">' +
+          (reframes && reframes.length > 0
+            ? '<button data-sub-id="' + s.id + '" class="btn-secondary btn-view-reframe" style="font-size:11px;padding:4px 10px">View Reframes</button>'
+            : '<button data-sub-id="' + s.id + '" class="btn-secondary btn-run-reframe" style="font-size:11px;padding:4px 10px">Reframe</button>') +
+        '</div>' +
+      '</div>';
+      // Show reframe suggestions inline if available
+      if (reframes && reframes.length > 0) {
+        html += '<div id="reframe-' + s.id + '" style="display:none;grid-column:1/-1;padding:8px 0 8px 12px;background:#f9f9f9;border-left:3px solid #00AAE8;margin-bottom:6px">';
+        reframes.slice(0,3).forEach(function(r) {
+          html += '<div style="font-size:12px;margin-bottom:6px"><strong style="color:#000864">' + escHtml(r.title || '') + '</strong><br>' +
+            '<span style="color:#666">' + escHtml(r.angle || '') + '</span>' +
+            (r.ownership_potential ? ' <span style="color:' + (r.ownership_potential === 'high' ? '#007A3D' : '#B8860B') + ';font-weight:700;font-size:11px">' + r.ownership_potential.toUpperCase() + ' POTENTIAL</span>' : '') +
+          '</div>';
+        });
+        html += '</div>';
+      }
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+
+  // Wire up buttons
+  var rerunBtn = document.getElementById('btn-rerun-competitive');
+  if (rerunBtn) rerunBtn.onclick = function() {
+    document.getElementById('competitive-content').innerHTML = buildCompetitiveLaunchScreen();
+    var rb = document.getElementById('btn-run-competitive');
+    if (rb) rb.onclick = runCompetitivePipeline;
+  };
+
+  el.querySelectorAll('.btn-view-reframe').forEach(function(btn) {
+    btn.onclick = function() {
+      var sid = this.getAttribute('data-sub-id');
+      var panel = document.getElementById('reframe-' + sid);
+      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    };
+  });
+
+  el.querySelectorAll('.btn-run-reframe').forEach(function(btn) {
+    btn.onclick = async function() {
+      var sid = this.getAttribute('data-sub-id');
+      this.textContent = 'Running...';
+      this.disabled = true;
+      var r = await api('POST', '/api/submissions/' + sid + '/competitive/reframe');
+      if (r.ok) {
+        renderCompetitive();
+      } else {
+        alert('Reframe failed: ' + (r.error || 'Unknown error'));
+        this.textContent = 'Reframe';
+        this.disabled = false;
+      }
+    };
+  });
+}
+
+
 // ─── PROGRAM INTELLIGENCE UI ─────────────────────────────────────────────────
 
 async function renderProgram() {
