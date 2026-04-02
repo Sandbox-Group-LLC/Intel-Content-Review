@@ -58,6 +58,22 @@ Render hard-kills HTTP connections at 30s. Claude calls take 30-40s.
 
 ---
 
+## Competitive Intelligence — Additional Context
+
+The `/competitive/run` endpoint accepts three optional body fields that augment (not override) the auto-detected pipeline:
+
+| Field | Effect |
+|---|---|
+| `known_competitors` | Injected into Perplexity Sonar as explicit research targets |
+| `audience_notes` | Appended to auto-detected audience context from event system prompt |
+| `strategic_notes` | Injected into Claude classifyGaps system prompt as positioning anchor |
+
+All fields are purely additive — blank input is a no-op. Auto-detection runs regardless.
+
+UI: Collapsible "Additional Context (optional)" panel above the Run Analysis button on the Competitive tab.
+
+---
+
 ## Database Schema
 
 ### Core Tables
@@ -130,6 +146,8 @@ Events → Submissions → Review → Speakers → Competitive → Program → M
 | GET | `/api/jobs/:id` | Poll job status + result |
 | GET/PUT | `/api/events/:id/cfp/config` | CFP config CRUD |
 | GET | `/api/events/:id/cfp/invitations` | Invitation list with status |
+| POST | `/api/events/:id/competitive/run` | Run competitive pipeline (accepts `known_competitors`, `audience_notes`, `strategic_notes` in body) |
+| GET | `/api/events/:id/competitive` | Get competitive intelligence results |
 | POST | `/api/events/:id/cfp/invite` | Single invite (resend-aware) |
 | POST | `/api/events/:id/cfp/invite-bulk` | Bulk invite |
 | DELETE | `/api/cfp/invitations/:id` | Revoke invite |
