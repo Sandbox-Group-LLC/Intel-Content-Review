@@ -2245,7 +2245,7 @@ function buildCFPPortalPage(inv, token) {
   // Tabs
   html += '<div class="card">' +
     '<div style="display:flex;gap:0;margin-bottom:20px">' +
-      '<button class="tab active" id="tab-form" onclick="switchTab(\'form\')">&#9998; Fill Out Form</button>' +
+      '<button class="tab active" id="tab-form" onclick="switchTab(\'form\')">Fill Out Form</button>' +
       '<button class="tab" id="tab-upload" onclick="switchTab(\'upload\')"><svg xmlns=&#39;http://www.w3.org/2000/svg&#39; width=&#39;14&#39; height=&#39;14&#39; viewBox=&#39;0 0 24 24&#39; fill=&#39;none&#39; stroke=&#39;currentColor&#39; stroke-width=&#39;2&#39; stroke-linecap=&#39;round&#39; stroke-linejoin=&#39;round&#39; style=&#39;vertical-align:-2px;margin-right:5px&#39;><path d=&#39;M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z&#39;/><polyline points=&#39;14 2 14 8 20 8&#39;/><line x1=&#39;16&#39; y1=&#39;13&#39; x2=&#39;8&#39; y2=&#39;13&#39;/><line x1=&#39;16&#39; y1=&#39;17&#39; x2=&#39;8&#39; y2=&#39;17&#39;/></svg> Upload One-Pager</button>' +
     '</div>';
 
