@@ -7,7 +7,7 @@ var crypto = require('crypto');
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY); }
 var APP_URL = process.env.APP_URL || 'https://intel-event-content-review.forge-os.ai';
-var FROM_EMAIL = process.env.EMAIL_FROM || 'Intel Content Review <noreply@forge-os.ai>';
+var FROM_EMAIL = process.env.EMAIL_FROM || 'Intel Content Review <noreply@makemysandbox.com>';
 var showdown = require('showdown');
 var multer = require('multer');
 
