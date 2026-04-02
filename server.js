@@ -2173,7 +2173,7 @@ function buildCFPPortalPage(inv, token) {
     '.tab.active{background:#000864;color:#fff;border-color:#000864}',
     '.tab-panel{display:none}.tab-panel.active{display:block}',
     '.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
-    '.flow-row{display:grid;grid-template-columns:80px 1fr;gap:8px;margin-bottom:8px}',
+    '.flow-row{display:grid;grid-template-columns:80px 1fr;gap:8px;margin-bottom:8px;align-items:start}',
     '.badge-cfp{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;color:#fff}',
     '.score-high{background:#007A3D}.score-mid{background:#B8860B}.score-low{background:#CC0000}.score-na{background:#6B6B6B}',
     '.alert-info{background:#EEF6FB;border:1px solid #00AAE8;padding:12px;margin-bottom:12px;font-size:13px}',
@@ -2230,7 +2230,7 @@ function buildCFPPortalPage(inv, token) {
   var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<title>' + escHtmlServer(eventName) + ' &mdash; Session Submission</title>' +
     '<style>' + css + '</style></head><body>' +
-    '<header><img src="/api/assets/Logo.png" alt="Intel" style="height:28px"><span>' + escHtmlServer(eventName) + ' &mdash; Session Submission</span></header>' +
+    '<header style="justify-content:space-between"><img src="/api/assets/Logo.png" alt="Intel" style="height:28px"><span style="font-size:14px;font-weight:400;letter-spacing:.02em;opacity:.85">' + escHtmlServer(eventName) + ' &mdash; Session Submission</span></header>' +
     '<div class="container">';
 
   // Welcome card
@@ -2284,9 +2284,9 @@ function buildCFPPortalPage(inv, token) {
     '<h3 style="margin-top:4px">Session Flow</h3>' +
     '<div style="font-size:12px;color:#666;margin-bottom:10px">Outline what you\'ll cover in each segment.</div>' +
     '<div class="flow-row"><div style="font-size:12px;font-weight:700;padding-top:10px">Intro (5 min)</div><textarea id="f-flow-intro" rows="2" placeholder="Hook, framing, why this matters"></textarea></div>' +
-    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 1</div><input id="f-s1-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s1" rows="2" placeholder="Main topic or argument"></textarea></div>' +
-    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 2</div><input id="f-s2-dur" placeholder="15 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s2" rows="2" placeholder="Deeper dive, case study, or demo"></textarea></div>' +
-    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;padding-top:10px">Section 3</div><input id="f-s3-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s3" rows="2" placeholder="Implications, proof points, Q&A setup"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Section 1</div><input id="f-s1-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s1" rows="2" placeholder="Main topic or argument"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Section 2</div><input id="f-s2-dur" placeholder="15 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s2" rows="2" placeholder="Deeper dive, case study, or demo"></textarea></div>' +
+    '<div class="flow-row"><div><div style="font-size:12px;font-weight:700;margin-bottom:4px">Section 3</div><input id="f-s3-dur" placeholder="10 min" style="margin-bottom:0;font-size:12px"></div><textarea id="f-flow-s3" rows="2" placeholder="Implications, proof points, Q&A setup"></textarea></div>' +
     '<div class="flow-row"><div style="font-size:12px;font-weight:700;padding-top:10px">Wrap-Up</div><textarea id="f-flow-wrap" rows="2" placeholder="Key takeaways, call to action"></textarea></div>' +
 
     '<h3 style="margin-top:4px">Supporting Details</h3>' +
