@@ -1473,7 +1473,10 @@ async function callSonar(pillar, audienceContext, knownCompetitors, strategicNot
     console.log('[Sonar] No PERPLEXITY_API_KEY — skipping');
     return null;
   }
-  var prompt = 'Research the ' + pillar + ' conference and event space for this audience: ' + audienceContext + '. ' +
+  var extraContext = '';
+  if (knownCompetitors && knownCompetitors.trim()) extraContext += ' Key competitors to specifically research: ' + knownCompetitors + '.';
+  if (strategicNotes && strategicNotes.trim()) extraContext += ' Strategic context: ' + strategicNotes + '.';
+  var prompt = 'Research the ' + pillar + ' conference and event space for this audience: ' + audienceContext + extraContext + ' ' +
     'Focus on government, defense, and enterprise technology events. ' +
     'Return ONLY valid JSON, no other text: ' +
     '{"dominantSpeakers":["name — topic they own"],' +
@@ -1525,7 +1528,7 @@ async function classifyGaps(sonarData, eventSystemPrompt, submissions, pillar, s
     'Classify session topic authority: OWNED (80-100 confidence, 1-2 dominant voices), ' +
     'CONTESTED (50-79, multiple voices no clear leader), UNCLAIMED (0-49, demand exists no authority). ' +
     'Evaluate: format ownership, recency gap, speaker authority, AI citation signal. ' +
-    'Event context: ' + eventContext + ' Return ONLY valid JSON.';
+    'Event context: ' + eventContext + strategicCtx + ' Return ONLY valid JSON.';
 
   var submissionTopics = submissions.map(function(s) {
     return { title: s.title, abstract: (s.abstract || '').slice(0, 100), track: s.track };
