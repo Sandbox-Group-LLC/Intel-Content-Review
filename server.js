@@ -42,7 +42,7 @@ async function callClaude(systemPrompt, userPrompt, isJson) {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json'
       },
-      timeout: 60000
+      timeout: 120000
     });
     var content = response.data.content[0].text;
     if (isJson) {
@@ -1570,41 +1570,56 @@ async function callSonar(pillar, audienceContext) {
       timeout: 30000
     });
     var text = response.data.choices[0].message.content;
-    var jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    return null;
+    // Strip markdown code fences if present
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    // Try direct parse first
+    try { return JSON.parse(text); } catch(e1) {}
+    // Try extracting JSON object — use last complete } to avoid truncation
+    var start = text.indexOf('{');
+    var end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(text.slice(start, end + 1)); } catch(e2) {}
+    }
+    // Build a safe fallback from what we can extract
+    console.log('[Sonar] Could not parse JSON, using fallback structure');
+    return { dominantSpeakers: [], dominantOrganizations: [], saturatedTopics: [], emergingTopics: [], missingTopics: [], aiCitations: [], recentConferenceAgendas: [] };
   } catch(e) {
     console.error('[Sonar] Error:', e.message);
-    return null;
+    return { dominantSpeakers: [], dominantOrganizations: [], saturatedTopics: [], emergingTopics: [], missingTopics: [], aiCitations: [], recentConferenceAgendas: [] };
   }
 }
 
 // ── Stage 2: Gap classification (claude-sonnet-4-6) ───────────────────────────
 async function classifyGaps(sonarData, eventSystemPrompt, submissions, pillar) {
-  var systemPrompt = 'You are a competitive intelligence agent for the events industry, specializing in session topic authority mapping. ' +
-    'Analyze the topic space and classify where authority is owned, contested, or unclaimed.\n\n' +
-    'EVENT CONTEXT:\n' + eventSystemPrompt + '\n\n' +
-    'OWNERSHIP CLASSIFICATION:\n' +
-    'OWNED (confidence 80-100): One or two voices consistently appear as authoritative. New entrants need a proprietary data angle, named framework, or attack a sub-niche.\n' +
-    'CONTESTED (confidence 50-79): Multiple voices, no clear authority. 6-12 month window to claim with consistent output.\n' +
-    'UNCLAIMED (confidence 0-49): Real audience demand, no authoritative voice. First mover with strong POV wins.\n\n' +
-    'Evaluate four ownership dimensions: format ownership, recency gap, speaker authority map, AI citation signal.\n' +
-    'Return ONLY valid JSON.';
+  // Trim eventSystemPrompt to first 600 chars to avoid timeout
+  var eventContext = (eventSystemPrompt || '').slice(0, 600);
+
+  var systemPrompt = 'You are a competitive intelligence agent for Intel events. ' +
+    'Classify session topic authority: OWNED (80-100 confidence, 1-2 dominant voices), ' +
+    'CONTESTED (50-79, multiple voices no clear leader), UNCLAIMED (0-49, demand exists no authority). ' +
+    'Evaluate: format ownership, recency gap, speaker authority, AI citation signal. ' +
+    'Event context: ' + eventContext + ' Return ONLY valid JSON.';
 
   var submissionTopics = submissions.map(function(s) {
-    return { title: s.title, abstract: (s.abstract || '').slice(0, 200), track: s.track };
+    return { title: s.title, abstract: (s.abstract || '').slice(0, 100), track: s.track };
   });
 
-  var userPrompt = 'Pillar: ' + pillar + '\n\n' +
-    'Live competitive research:\n' + JSON.stringify(sonarData) + '\n\n' +
-    'Current Intel submissions for this pillar:\n' + JSON.stringify(submissionTopics) + '\n\n' +
-    'Return JSON:\n' +
-    '{"marketSnapshot":{"totalTopicsAnalyzed":0,"owned":0,"contested":0,"unclaimed":0,"highUrgencyOpportunities":0},' +
-    '"topics":[{"topic":"","ownershipStatus":"owned|contested|unclaimed","confidence":0,' +
-    '"ownedBy":[],"formatGaps":[],"recencyGap":false,"recencyNote":"",' +
-    '"aiCitationOwner":"","whyUnclaimed":"","entryAngle":"","suggestedSessionTitle":"","urgency":"high|medium|low","urgencyReason":""}],' +
-    '"whitespaceOpportunities":[{"cluster":"","sessionCount":0,"estimatedClaimWindow":"","ownItStrategy":""}],' +
-    '"competitorProfiles":[{"name":"","topicsOwned":[],"weaknesses":[],"attackAngle":""}]}';
+  // Trim Sonar data to keep prompt manageable
+  var trimmedSonar = {
+    dominantSpeakers: (sonarData.dominantSpeakers || []).slice(0, 5),
+    dominantOrganizations: (sonarData.dominantOrganizations || []).slice(0, 5),
+    saturatedTopics: (sonarData.saturatedTopics || []).slice(0, 6),
+    emergingTopics: (sonarData.emergingTopics || []).slice(0, 6),
+    missingTopics: (sonarData.missingTopics || []).slice(0, 5),
+    aiCitations: (sonarData.aiCitations || []).slice(0, 5)
+  };
+
+  var parts = [];
+  parts.push('Pillar: ' + pillar);
+  parts.push('Competitive research: ' + JSON.stringify(trimmedSonar));
+  parts.push('Intel submissions: ' + JSON.stringify(submissionTopics));
+  parts.push('Return JSON: {"marketSnapshot":{"totalTopicsAnalyzed":0,"owned":0,"contested":0,"unclaimed":0,"highUrgencyOpportunities":0},"topics":[{"topic":"","ownershipStatus":"owned","confidence":0,"ownedBy":[],"formatGaps":[],"recencyGap":false,"recencyNote":"","aiCitationOwner":"","whyUnclaimed":"","entryAngle":"","suggestedSessionTitle":"","urgency":"high","urgencyReason":""}],"whitespaceOpportunities":[{"cluster":"","sessionCount":0,"estimatedClaimWindow":"","ownItStrategy":""}],"competitorProfiles":[{"name":"","topicsOwned":[],"weaknesses":[],"attackAngle":""}]}');
+  var userPrompt = parts.join('\n\n');
 
   return await callClaude(systemPrompt, userPrompt, true);
 }
@@ -1632,8 +1647,13 @@ async function reframeSubmission(submission, gapAnalysis, pillar) {
       timeout: 20000
     });
     var text = response.data.content[0].text;
-    var jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    try { return JSON.parse(text); } catch(e1) {}
+    var start = text.indexOf('{'); var end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(text.slice(start, end + 1)); } catch(e2) {}
+    }
+    console.log('[Haiku reframe] Could not parse JSON response');
     return null;
   } catch(e) {
     console.error('[Haiku reframe] Error:', e.message);
