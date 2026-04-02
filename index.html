@@ -217,7 +217,20 @@ async function loadEvents() {
   sel.innerHTML = allEvents.map(function(e){
     return '<option value="' + e.id + '"' + (String(e.id) === String(currentEventId) ? ' selected' : '') + '>' + e.name + '</option>';
   }).join('');
+  var wasNull = !currentEventId;
   if (!currentEventId && allEvents.length) { currentEventId = String(allEvents[0].id); sel.value = currentEventId; }
+  // Re-render active section if it was waiting on a valid event ID
+  if (wasNull && currentEventId) {
+    var activeSect = document.querySelector('.section.active');
+    if (activeSect && activeSect.id !== 'section-events') {
+      var name = activeSect.id.replace('section-', '');
+      if (name === 'competitive') renderCompetitive();
+      else if (name === 'program') renderProgram();
+      else if (name === 'memory') renderMemory();
+      else if (name === 'submissions') renderSubmissions();
+      else if (name === 'review') renderReview();
+    }
+  }
   return allEvents;
 }
 
