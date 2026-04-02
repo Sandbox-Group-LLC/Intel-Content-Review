@@ -1737,15 +1737,50 @@ function buildCompetitiveLaunchScreen() {
         '<div style="font-size:11px;color:#666">Title saturation + reframe suggestions</div>' +
       '</div>' +
     '</div>' +
+    '<div style="margin:20px 0;border:1px solid #EAEAEA;background:#fff">' +
+      '<div id="ci-context-toggle" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;user-select:none" onclick="toggleCIContext()">' +
+        '<div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#2E2F2F">Additional Context <span style="font-size:11px;font-weight:400;color:#666">(optional)</span></div>' +
+        '<div id="ci-context-arrow" style="font-size:11px;color:#666">&#9660; expand</div>' +
+      '</div>' +
+      '<div id="ci-context-panel" style="display:none;padding:0 16px 16px">' +
+        '<div style="margin-bottom:12px">' +
+          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Known Competitors</label>' +
+          '<input id="ci-known-competitors" placeholder="e.g. Dell Technologies, AWS, NVIDIA, Leidos" style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit">' +
+          '<div style="font-size:11px;color:#666;margin-top:3px">Override or supplement auto-discovered competitors</div>' +
+        '</div>' +
+        '<div style="margin-bottom:12px">' +
+          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Audience / ICP Notes</label>' +
+          '<textarea id="ci-audience-notes" rows="2" placeholder="e.g. Primary audience is federal civilian agencies and DoD contractors, budget cycles Q3/Q4..." style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit;resize:vertical"></textarea>' +
+        '</div>' +
+        '<div>' +
+          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px">Strategic Notes</label>' +
+          '<textarea id="ci-strategic-notes" rows="2" placeholder="e.g. Intel is trying to own the inference story, key weakness is brand awareness vs NVIDIA in AI..." style="width:100%;border:1px solid #2E2F2F;padding:8px;font-size:13px;font-family:inherit;resize:vertical"></textarea>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
     '<button class="btn-primary" id="btn-run-competitive" style="font-size:14px;padding:14px 32px">Run Competitive Analysis</button>' +
     '<p style="font-size:11px;color:#666;margin-top:12px">Pipeline runs in the background. Auto-refreshes when complete.</p>' +
   '</div>';
 }
 
+function toggleCIContext() {
+  var panel = document.getElementById('ci-context-panel');
+  var arrow = document.getElementById('ci-context-arrow');
+  if (!panel) return;
+  var open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.innerHTML = open ? '&#9660; expand' : '&#9650; collapse';
+}
+
 async function runCompetitivePipeline() {
   var btn = document.getElementById('btn-run-competitive');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
-  var r = await api('POST', '/api/events/' + currentEventId + '/competitive/run');
+  var body = {
+    known_competitors: (document.getElementById('ci-known-competitors') || {}).value || '',
+    audience_notes: (document.getElementById('ci-audience-notes') || {}).value || '',
+    strategic_notes: (document.getElementById('ci-strategic-notes') || {}).value || ''
+  };
+  var r = await api('POST', '/api/events/' + currentEventId + '/competitive/run', body);
   if (r.ok) {
     startCompetitivePolling(r.pillars || []);
   } else {
