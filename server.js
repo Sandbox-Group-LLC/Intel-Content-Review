@@ -955,7 +955,7 @@ app.get('/api/submissions', async function (req, res) {
         s.format, s.duration, s.abstract, s.key_topics, s.demos,
         s.featured_products, s.business_challenge, s.partner_highlights,
         s.new_launches, s.reviewer_notes, s.status, s.ai_score,
-        s.enriched_abstract, s.created_at,
+        s.enriched_abstract, s.source, s.created_at,
         (
           SELECT string_agg(sp.full_name, ', ' ORDER BY sp.full_name)
           FROM submission_speakers ss
@@ -1059,7 +1059,7 @@ app.post('/api/submissions/:id/score', async function (req, res) {
         s.format, s.duration, s.abstract, s.key_topics, s.demos,
         s.featured_products, s.business_challenge, s.partner_highlights,
         s.new_launches, s.reviewer_notes, s.status, s.ai_score,
-        s.enriched_abstract, s.created_at,
+        s.enriched_abstract, s.source, s.created_at,
         (
           SELECT string_agg(sp.full_name, ', ' ORDER BY sp.full_name)
           FROM submission_speakers ss
@@ -1091,6 +1091,51 @@ app.post('/api/submissions/:id/score', async function (req, res) {
       }
     } catch(me) { console.log('[Memory] retrieval skipped:', me.message); }
 
+    // ── Competitive Intelligence injection ──
+    var competitiveContext = '';
+    try {
+      var ciResults = await sql`
+        SELECT pillar, gap_analysis FROM competitive_intelligence
+        WHERE event_id = ${evt.id}
+        ORDER BY run_at DESC
+      `;
+      if (ciResults.length > 0) {
+        // Find the best matching pillar for this submission
+        var subTrack = (sub.track || '').toLowerCase();
+        var matchedCI = ciResults.find(function(ci) {
+          var pillar = (ci.pillar || '').toLowerCase();
+          return subTrack.includes(pillar.split(' ')[0]) || pillar.includes(subTrack.split(' ')[0]);
+        }) || ciResults[0];
+
+        if (matchedCI && matchedCI.gap_analysis) {
+          var ga = typeof matchedCI.gap_analysis === 'string' ? JSON.parse(matchedCI.gap_analysis) : matchedCI.gap_analysis;
+          var topics = (ga.topics || []).slice(0, 5);
+          if (topics.length > 0) {
+            competitiveContext = '\n\nCOMPETITIVE LANDSCAPE (' + matchedCI.pillar + ') — use this to score intel_alignment and strategic_value more precisely:\n';
+            topics.forEach(function(t) {
+              competitiveContext += '- ' + t.topic + ': ' + (t.ownershipStatus || 'unknown').toUpperCase() +
+                ' (confidence ' + (t.confidence || 0) + ')' +
+                (t.ownedBy && t.ownedBy.length ? ', owned by: ' + t.ownedBy.join(', ') : '') +
+                (t.entryAngle ? ' — Intel angle: ' + t.entryAngle : '') + '\n';
+            });
+            var whitespace = (ga.whitespaceOpportunities || []).slice(0, 2);
+            if (whitespace.length) {
+              competitiveContext += 'Unclaimed opportunities: ' + whitespace.map(function(w){ return w.cluster; }).join(', ') + '\n';
+            }
+          }
+        }
+      }
+    } catch(ce) { console.log('[Competitive] context skipped:', ce.message); }
+
+    // ── CFP source context ──
+    var cfpContext = '';
+    if (sub.source === 'cfp') {
+      cfpContext = '\n\nNOTE: This is a speaker-submitted CFP proposal (not an internal Intel submission). ' +
+        'The abstract may be rougher than internal content. For delivery_readiness, the speaker IS the content owner — ' +
+        'weight format clarity and specificity of session flow. Score with the understanding that content will be refined ' +
+        'through the Intel review process.';
+    }
+
     var userPrompt = [
       'Title: ' + (sub.title || ''),
       'Abstract: ' + (sub.abstract || ''),
@@ -1101,7 +1146,7 @@ app.post('/api/submissions/:id/score', async function (req, res) {
       'Business Challenge: ' + (sub.business_challenge || ''),
       'Speakers: ' + (sub.speaker_names || 'N/A')
     ].join('\n');
-    var scorecard = await callClaude(evt.ai_system_prompt + memoryContext, userPrompt, true);
+    var scorecard = await callClaude(evt.ai_system_prompt + memoryContext + competitiveContext + cfpContext, userPrompt, true);
     await sql`UPDATE submissions SET ai_score = ${JSON.stringify(scorecard)}, memory_insights = ${JSON.stringify(memoryInsights)} WHERE id = ${id}`;
     try {
       var evtForScore = await sql`SELECT * FROM events WHERE id = ${sub.event_id}`;
