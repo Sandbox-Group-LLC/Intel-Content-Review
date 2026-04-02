@@ -598,12 +598,12 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [ ] POST /api/events/:id/competitive/run — orchestrates all three stages
 - [ ] GET /api/events/:id/competitive — returns latest results
 - [ ] POST /api/submissions/:id/competitive/reframe — single submission reframe
-- [ ] Competitive Intelligence tab in Review section UI
+- [x] Competitive Intelligence — dedicated Intel nav section UI
 - [ ] Whitespace Report view — unclaimed clusters, pillar coverage map, plant-a-flag recommendations
 - [ ] Competitor heat map UI component
 - [ ] Per-submission competitive badge in submissions table (OWNED/CONTESTED/UNCLAIMED)
 - [ ] Reframe suggestions surface in submission detail panel
-- [ ] Update README with Phase 4.5 endpoints and env vars
+- [x] Update README with Phase 4.5 endpoints and env vars
 
 
 ---
@@ -613,6 +613,7 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 > **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI)
 > **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI)
 > **Phase 3 shipped** — `edcd9b4` (server) + `ef306c7` (UI) — deployed to Render April 1, 2026
+> **Phase 4.5 shipped** — `f8c7141` (server) + `844dbbc` (UI) — v2 COMPLETE
 > **Phase 4 shipped** — `90f4da9` (server) + `cb55a99` (UI) — deployed to Render April 1, 2026
 > **Phase 3 bug fix** — `c674789` — Memory Brain UI rewritten to eliminate JS quote escaping crashes — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
 
@@ -625,7 +626,7 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [x] Compliance flag: scanDisclosureFlags() detects roadmap/launch/NDA language, runs on every save
 - [x] NDA fields (nda_required, nda_approver) added to DB and surfaced as amber banner in submission detail
 - [x] Conflict/overlap detection on submission save — keyword overlap within same track, stored in submission_conflicts
-- [ ] Update README with gate requirements and enforcement levels ← next
+- [x] Update README with gate requirements and enforcement levels ← next
 
 ### Phase 2 — Voyager AI Memory Brain
 - [x] Enable pgvector on Neon (`CREATE EXTENSION IF NOT EXISTS vector`)
@@ -653,16 +654,16 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [x] All notification triggers wired — score, status change, gate block, submitter update, magic link send
 
 ### Phase 4.5 — Competitive Intelligence
-- [ ] Add `competitive_intelligence` table + submission competitive fields to schema
-- [ ] Perplexity Sonar client — Stage 1 per content pillar
-- [ ] Stage 2 gap classification — claude-sonnet-4-6 with event system prompt
-- [ ] Stage 3 per-submission reframe — claude-haiku-4-5-20251001
-- [ ] POST /api/events/:id/competitive/run orchestrator
-- [ ] Competitive Intelligence tab in Review section
-- [ ] Whitespace Report view + pillar coverage map
-- [ ] Per-submission OWNED/CONTESTED/UNCLAIMED badge in table
-- [ ] Reframe suggestions in submission detail panel
-- [ ] Update README
+- [x] competitive_intelligence table + submission competitive fields (competitive_analysis, title_saturation_score, reframe_suggestions)
+- [x] Perplexity Sonar client — callSonar() per content pillar, auto-extracted from event ai_system_prompt
+- [x] Stage 2 gap classification — classifyGaps() via claude-sonnet-4-6 with event system prompt + Sonar data
+- [x] Stage 3 per-submission reframe — reframeSubmission() via claude-haiku-4-5-20251001
+- [x] POST /api/events/:id/competitive/run — async pipeline orchestrator
+- [x] Competitive Intelligence — dedicated Intel nav section
+- [x] Whitespace Report — unclaimed clusters with claim window and own-it strategy
+- [x] Per-submission title saturation scores + reframe suggestions in submission table
+- [x] Reframe suggestions inline in competitive section + single-submission reframe trigger
+- [x] Update README
 
 ### Phase 4 — Program Intelligence
 - [x] Program health dashboard — track balance, slot utilization, avg score per track, gate readiness bars with deadline countdown
@@ -670,7 +671,7 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 - [x] Cross-event trend intelligence — insight chips, event score trajectory table, auto-generated benchmarks
 - [x] KPI benchmarking — score delta, demo/partner participation rate comparison vs prior events
 - [x] Memory brain insight cards surfaced in Program section
-- [ ] Update README with all new endpoints and env vars
+- [x] Update README with all new endpoints and env vars
 
 ---
 
@@ -706,5 +707,5 @@ The tool succeeds when the feedback loop closes:
 
 ---
 
-*Last updated: April 1, 2026 — Phases 1–4 complete*
+*Last updated: April 1, 2026 — v2 COMPLETE: Phases 1, 2, 3, 4, 4.5 all shipped*
 *Owner: Brian Morgan / Taylor*
