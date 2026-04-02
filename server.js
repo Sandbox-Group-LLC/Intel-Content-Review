@@ -2011,6 +2011,37 @@ app.post('/api/cfp/:token/submit', async function(req, res) {
       await sql`UPDATE cfp_invitations SET submission_id=${subId}, submitted_at=NOW() WHERE token=${token}`;
     }
 
+    // ── Auto-create speakers from intel_speakers field ──
+    if (b.intel_speakers && b.intel_speakers.trim()) {
+      // Support comma-separated names: "Jane Smith, John Doe"
+      var speakerNames = b.intel_speakers.split(',').map(function(n){ return n.trim(); }).filter(Boolean);
+      for (var si = 0; si < speakerNames.length; si++) {
+        var spName = speakerNames[si];
+        try {
+          // Check if speaker already exists for this event
+          var existing = await sql`SELECT id FROM speakers WHERE event_id = ${inv.event_id} AND LOWER(full_name) = LOWER(${spName}) LIMIT 1`;
+          var speakerId;
+          if (existing.length) {
+            speakerId = existing[0].id;
+          } else {
+            // Create new speaker record
+            var newSpeaker = await sql`
+              INSERT INTO speakers (event_id, full_name, company, email)
+              VALUES (${inv.event_id}, ${spName}, 'Intel', ${inv.email})
+              RETURNING id
+            `;
+            speakerId = newSpeaker[0].id;
+          }
+          // Link to submission (ignore duplicate)
+          await sql`
+            INSERT INTO submission_speakers (submission_id, speaker_id)
+            VALUES (${subId}, ${speakerId})
+            ON CONFLICT DO NOTHING
+          `;
+        } catch(spErr) { console.error('[CFP speaker upsert]', spErr.message); }
+      }
+    }
+
     var subForEmail = { title: b.title };
     sendCFPConfirmation(inv, evt, subForEmail).catch(function(){});
 
