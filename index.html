@@ -829,34 +829,35 @@ async function runCoaching(id) {
     '<div style="font-size:11px;color:#666">Elapsed: <span id="coach-timer">0</span>s</div>' +
   '</div>';
 
-  var r;
-  try { r = await api('POST', '/api/submissions/' + id + '/coach'); } catch(e) { r = { error: e.message }; }
+  // Fire and forget — server responds immediately, does work async
+  try { await api('POST', '/api/submissions/' + id + '/coach'); } catch(e) {}
 
-  clearInterval(timerInterval);
-  clearInterval(progressInterval);
-
-  if (r && r.ok && r.report) {
-    loadCoachingPanel(id, r.report);
-  } else {
-    // Report may have saved — re-fetch submission and try to load from DB
+  // Poll every 5s until coaching_report appears
+  var coachPollCount = 0;
+  var coachPollInterval = setInterval(async function() {
+    coachPollCount++;
     try {
-      var fresh = await api('GET', '/api/submissions/' + id + '/versions');
       var subData = await api('GET', '/api/submissions?event_id=' + currentEventId);
-      if (subData.ok) {
-        var sub = (subData.submissions || []).find(function(s){ return String(s.id) === String(id); });
-        if (sub && sub.coaching_report) {
-          loadCoachingPanel(id, sub.coaching_report);
-        } else {
-          el.innerHTML = '<div style="padding:10px;background:#FFF8EC;border:1px solid #B8860B;font-size:12px;color:#B8860B">' +
-            'Coaching is taking longer than expected. Click Get Coaching again to retry, or refresh.</div>';
+      if (subData.ok && subData.submissions) {
+        var updated = subData.submissions.find(function(s){ return String(s.id) === String(id); });
+        if (updated && updated.coaching_report) {
+          clearInterval(coachPollInterval);
+          clearInterval(timerInterval);
+          clearInterval(progressInterval);
+          allSubmissions = subData.submissions.map(parseAiScore);
+          renderSubTable();
+          loadCoachingPanel(id, updated.coaching_report);
+          return;
         }
       }
-    } catch(fe) {
-      el.innerHTML = '<div style="padding:10px;background:#FFF8EC;border:1px solid #B8860B;font-size:12px;color:#B8860B">' +
-        'Coaching is taking longer than expected. Click Get Coaching again to retry.</div>';
+    } catch(pe) {}
+    if (coachPollCount >= 18) {
+      clearInterval(coachPollInterval);
+      clearInterval(timerInterval);
+      clearInterval(progressInterval);
+      if (el) el.innerHTML = '<div style="padding:10px;background:#FFF8EC;border:1px solid #B8860B;font-size:12px;color:#B8860B">Coaching is taking longer than expected. Please refresh in a moment.</div>';
     }
-  }
-  renderSubmissions();
+  }, 5000);
 }
 
 function loadCoachingPanel(id, report) {
@@ -1049,31 +1050,37 @@ async function scoreSubmission(id) {
     }
   }, 1000);
 
-  try {
-    var r = await api('POST', '/api/submissions/' + id + '/score');
-  } catch(fetchErr) {
-    r = { error: fetchErr.message };
-  }
+  // Fire and forget — server responds immediately, does work async
+  try { await api('POST', '/api/submissions/' + id + '/score'); } catch(e) {}
 
-  clearInterval(timerInterval);
-  clearInterval(progressInterval);
-
-  // Always re-fetch from DB — score is saved server-side regardless of response parsing
-  try {
-    var freshData = await api('GET', '/api/submissions?event_id=' + currentEventId);
-    if (freshData.ok && freshData.submissions) {
-      allSubmissions = freshData.submissions.map(parseAiScore);
-      renderSubTable();
+  // Poll every 5s until ai_score appears on the submission
+  var pollCount = 0;
+  var pollInterval = setInterval(async function() {
+    pollCount++;
+    try {
+      var freshData = await api('GET', '/api/submissions?event_id=' + currentEventId);
+      if (freshData.ok && freshData.submissions) {
+        var updated = freshData.submissions.find(function(s){ return String(s.id) === String(id); });
+        if (updated && updated.ai_score) {
+          clearInterval(pollInterval);
+          clearInterval(timerInterval);
+          clearInterval(progressInterval);
+          allSubmissions = freshData.submissions.map(parseAiScore);
+          renderSubTable();
+          viewSubmission(id);
+          return;
+        }
+      }
+    } catch(pe) {}
+    // Safety cutoff after 90s (18 polls)
+    if (pollCount >= 18) {
+      clearInterval(pollInterval);
+      clearInterval(timerInterval);
+      clearInterval(progressInterval);
+      var panel = document.getElementById('slide-panel');
+      if (panel) panel.innerHTML = '<div style="padding:24px"><div style="color:#B8860B;font-size:13px">Scoring is taking longer than expected. Please refresh in a moment.</div></div>';
     }
-  } catch(fe) {}
-
-  if (r && r.error && !r.ok) {
-    // Score may still have saved — show warning but load the submission
-    var warnEl = document.getElementById('slide-panel');
-    if (warnEl) warnEl.innerHTML += '<div style="padding:8px 24px;color:#B8860B;font-size:12px">Note: ' + r.error + ' — refreshing from database.</div>';
-  }
-
-  viewSubmission(id);
+  }, 5000);
 }
 
 async function enrichAbstract(id) {
