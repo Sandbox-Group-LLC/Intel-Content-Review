@@ -1,338 +1,165 @@
 # Intel Event Content Review
 
-An internal tool for managing and AI-scoring breakout session submissions for Intel events. Built to replace a manual PowerPoint-based review process with an intelligent workflow that scores submissions against event goals, enforces quality gates, injects institutional memory, coaches content owners, and tracks review status across a team.
-
-Live: [https://intel-event-content-review.forge-os.ai](https://intel-event-content-review.forge-os.ai)
-
----
-
-## Overview
-
-Intel Event Content Review lets event teams define an event's strategic objectives, collect session submissions, and run AI scoring against those objectives — all in one place. The system learns from every event cycle through a Voyager AI-powered memory brain, enforces submission quality gates, generates coaching reports for content owners, and sends notifications via email. A submitter portal gives content owners direct access to their scores and coaching without admin access.
-
-Built for Intel Federal Summit 2026 and designed to support any Intel event. Each event has its own AI system prompt, derived from the event's strategy document, which governs how submissions are scored.
+**Live:** https://intel-event-content-review.forge-os.ai  
+**Repo:** Sandbox-Group-LLC/Intel-Content-Review (branch: main)  
+**Deploy:** Render — auto-deploys on push to main
 
 ---
 
 ## Stack
 
-| Layer | Technology |
-|---|---|
-| Backend | Node.js + Express (CommonJS) |
-| Frontend | Vanilla JS + HTML/CSS (`index.html`) |
-| Database | Neon PostgreSQL via `@neondatabase/serverless` + pgvector |
-| AI — Profile Generation | Claude (claude-sonnet-4-6) |
-| AI — Scoring & Enrichment | Claude (claude-sonnet-4-6) |
-| AI — Coaching Reports | Claude (claude-sonnet-4-6) |
-| Embeddings | Voyager AI (voyage-3, 768-dim) |
-| Email | Resend |
-| File Parsing | Multer (in-memory) |
-| Hosting | Render (service ID: `srv-d6utqi9j16oc738tkpe0`) |
+- **Runtime:** Node.js + Express (CommonJS), single `server.js` + `index.html`
+- **Database:** Neon PostgreSQL + pgvector
+- **AI:** Claude claude-sonnet-4-6 (scoring, coaching, enrichment), Voyage AI voyage-3 (embeddings), Haiku claude-haiku-4-5-20251001 (reframes)
+- **Email:** Resend — `FROM_EMAIL: Intel Content Review <noreply@makemysandbox.com>`
+- **Competitive Intel:** Perplexity Sonar
+- **PPTX Parsing:** adm-zip (CFP upload path)
+
+### Environment Variables (Render)
+`ANTHROPIC_API_KEY` · `VOYAGER_API_KEY` · `RESEND_API_KEY` · `PERPLEXITY_API_KEY` · `APP_DATABASE_URL`
 
 ---
 
-## Environment Variables
+## Intel Design System
 
-| Variable | Description |
+| Token | Value |
 |---|---|
-| `APP_DATABASE_URL` | Neon PostgreSQL connection string |
-| `ANTHROPIC_API_KEY` | Used for all Claude API calls |
-| `VOYAGER_API_KEY` | Used for embedding generation (Voyager AI voyage-3) |
-| `RESEND_API_KEY` | Used for transactional email notifications |
-| `EMAIL_FROM` | Sender address (optional, defaults to noreply@forge-os.ai) |
-| `APP_URL` | Base URL for magic link generation (optional) |
-| `PORT` | Optional, defaults to 3000 |
+| Energy Blue | `#00AAE8` |
+| Cobalt | `#000864` |
+| Carbon Light | `#EAEAEA` |
+| Carbon Dark | `#2E2F2F` |
 
-All variables are injected at runtime via Render. No `.env` file is used.
+- Font: Intel One Display (served from `/api/assets/`)
+- `border-radius: 0` everywhere — no shadows, no gradients, no emojis
+- Favicon: Intel blue square logo embedded as base64 at `/favicon.png`
+
+---
+
+## Architecture
+
+### Background AI Job Processor (CRITICAL)
+
+Render hard-kills HTTP connections at 30s. Claude calls take 30-40s.
+
+**Solution:** Persistent `setInterval` background processor started at boot:
+- `ai_jobs` table: `submission_id`, `job_type` (score/coach), `status` (pending/running/done/error), timestamps
+- `/score` and `/coach` routes: insert job row, return `{ok:true, job_id}` in <100ms
+- `processJobs()` runs every 5s, claims jobs atomically via `UPDATE ... WHERE id = (SELECT ... LIMIT 1)`
+- `runScoringJob()` + `runCoachingJob()` contain full intelligence logic
+- `GET /api/jobs/:id` — client polls for status + result
+- UI polls every 5s, auto-renders when `status === 'done'`, 3-min safety cutoff
+
+### Three-Layer Intelligence Stack (injected into every score)
+
+1. **Event goals** — `evt.ai_system_prompt` (configured per event)
+2. **Memory brain** — top-5 past event insights via pgvector cosine similarity (voyage-3 embeddings)
+3. **Competitive landscape** — Owned/Contested/Unclaimed topic context matched to submission track
+4. **CFP source flag** — if `source='cfp'`, Claude gets note that this is a speaker-direct proposal
 
 ---
 
 ## Database Schema
 
-Tables auto-created on startup via `ensureSchema()`.
+### Core Tables
 
-### `events`
-| Column | Type | Description |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `name` | TEXT | Event name |
-| `event_date` | TEXT | Display date |
-| `venue` | TEXT | Venue name |
-| `slot_count` | INTEGER | Total available session slots |
-| `slug` | TEXT | URL slug for submitter portal |
-| `notification_email` | TEXT | Reviewer email for submitter update notifications |
-| `gate_50_deadline` | TEXT | Admin-defined 50% review deadline date |
-| `gate_75_deadline` | TEXT | Admin-defined 75% review deadline date |
-| `gate_90_deadline` | TEXT | Admin-defined 90% review deadline date |
-| `context_profile` | TEXT | Human-readable event summary for submitters |
-| `ai_system_prompt` | TEXT | System prompt used by AI scorer — generated from event strategy document |
-| `created_at` | TIMESTAMPTZ | |
+**events** — id, name, event_date, venue, slot_count, slug, notification_email, gate deadlines, context_profile, ai_system_prompt
 
-### `submissions`
-| Column | Type | Description |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `event_id` | INTEGER FK | Parent event |
-| `title` | TEXT | Session title |
-| `content_lead` | TEXT | Content lead name |
-| `bu` | TEXT | Intel Business Unit |
-| `track` | TEXT | Content track |
-| `format` | TEXT | Session format |
-| `duration` | TEXT | Session length |
-| `abstract` | TEXT | Original abstract |
-| `enriched_abstract` | TEXT | AI-enriched abstract (HTML) |
-| `key_topics` | TEXT | |
-| `demos` | TEXT | |
-| `featured_products` | TEXT | |
-| `business_challenge` | TEXT | |
-| `partner_highlights` | TEXT | |
-| `new_launches` | TEXT | |
-| `reviewer_notes` | TEXT | Manual reviewer notes |
-| `status` | TEXT | `submitted` / `under_review` / `approved` / `declined` / `needs_revision` |
-| `disclosure_flag` | BOOLEAN | Auto-detected roadmap/launch language |
-| `nda_required` | BOOLEAN | NDA flag |
-| `nda_approver` | TEXT | NDA approver name |
-| `ai_score` | JSONB | Full AI scorecard |
-| `memory_insights` | JSONB | Memory entries that influenced the score |
-| `coaching_report` | JSONB | AI coaching report |
-| `score_delta` | INTEGER | Score improvement from first version |
-| `version_number` | INTEGER | Current version number |
-| `created_at` | TIMESTAMPTZ | |
+**submissions** — id, event_id, title, content_lead, bu, track, format, duration, abstract, enriched_abstract, key_topics, demos, featured_products, business_challenge, partner_highlights, new_launches, reviewer_notes, status, disclosure_flag, nda_required, nda_approver, ai_score (JSONB), memory_insights (JSONB), coaching_report (JSONB), score_delta, version_number, competitive_analysis (JSONB), title_saturation_score, reframe_suggestions (JSONB), **source** (cfp/internal), **intel_speakers**, **partner_walkons**, **session_flow** (JSONB), **cfp_raw_filename**, **cfp_raw_file** (BYTEA)
 
-### `speakers`
-| Column | Type | Description |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `event_id` | INTEGER FK | Parent event |
-| `full_name` | TEXT | |
-| `title` | TEXT | |
-| `company` | TEXT | |
-| `email` | TEXT | |
-| `bio` | TEXT | |
-| `headshot` | BYTEA | Binary image data |
-| `headshot_mimetype` | TEXT | |
-| `created_at` | TIMESTAMPTZ | |
+**speakers, submission_speakers, submission_conflicts, submission_versions, submission_gates**
 
-### `submission_gates`
-Persists gate evaluation results per submission.
+**event_memories** — vector(768), category, content, event_id
 
-| Column | Type | Description |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `submission_id` | INTEGER FK | |
-| `gate` | TEXT | `gate_50` / `gate_75` / `gate_90` |
-| `score` | INTEGER | 0–100 completeness score |
-| `level` | TEXT | `pass` (0–49) / `warn` (50–79) / `block` (80–100) |
-| `checked_at` | TIMESTAMPTZ | |
-| `blocking_fields` | JSONB | Fields preventing advancement |
+**survey_responses, speaker_history**
 
-### `submission_conflicts`
-Stores detected topic overlap conflicts between submissions.
+**magic_link_tokens** — 72hr expiry, submitter portal auth
 
-### `submission_versions`
-Version history snapshots for every submission save.
+**competitive_intelligence** — pillar, gap_analysis (JSONB), run_at
 
-### `event_memories`
-Voyager AI-embedded lessons from past events.
+**cfp_config** — per-event: status (open/closed), deadline, welcome_heading, welcome_body, reply_to_email
 
-| Column | Type | Description |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `event_id` | INTEGER FK | |
-| `category` | TEXT | `what_worked` / `what_didnt` / `speaker_insight` / `topic_trend` / `audience_signal` / `kpi_outcome` |
-| `content` | TEXT | Memory lesson text |
-| `embedding` | vector(768) | Voyager AI embedding for similarity search |
-| `signal_strength` | FLOAT | 0.1–3.0, adjustable via upvote/downvote |
-| `source` | TEXT | `manual` / `auto_extracted` / `survey` |
-| `created_at` | TIMESTAMPTZ | |
+**cfp_invitations** — token, event_id, email, name, sent_at, opened_at, submitted_at, submission_id, reminder_count
 
-### `survey_responses`
-Post-event survey data per session, imported from Evolio/Cvent CSV.
-
-### `speaker_history`
-Cross-event speaker performance tracking, auto-updated from survey imports.
-
-### `magic_link_tokens`
-Time-limited tokens for submitter portal access (72hr expiry).
+**ai_jobs** — submission_id, job_type, status, created_at, started_at, completed_at, error_msg
 
 ---
 
-## AI Features
+## AI Scoring — 6 Universal Dimensions
 
-### Event Profile Generation
-`POST /api/events/generate-profile`
-
-Accepts a raw strategy document and passes it to Claude. Returns a structured event profile and a detailed scoring rubric (`ai_system_prompt`) stored on the event record.
-
-### AI Scoring
-`POST /api/submissions/:id/score`
-
-Before scoring, retrieves top-5 relevant memories via pgvector cosine similarity search and injects them into the Claude system prompt as past event insights. Scores across six universal dimensions:
-
-| Dimension | Description |
-|---|---|
-| `audience_fit` | Content appropriate for this event's specific audience |
-| `intel_alignment` | Showcases Intel silicon, software, or ecosystem meaningfully |
-| `technical_depth` | Substantive for the technical buyers this event targets |
-| `strategic_value` | Advances Intel's goals — pipeline, preference, trust, thought leadership |
-| `partner_ecosystem_value` | Includes customer/partner voices that add credibility |
-| `delivery_readiness` | Speakers confirmed, format appropriate, abstract clear |
-
-Returns `overall` (0–100), dimension scores + rationale, strengths, gaps, recommendation.
-
-### AI Coaching Reports
-`POST /api/submissions/:id/coach`
-
-Generates a structured coaching report grounded in gate status, memory brain, and event context. Returns: critical fixes, high-impact improvements, quick wins, past event examples, and an overall coaching note.
-
-### Abstract Enrichment
-`POST /api/submissions/:id/enrich`
-
-Refines the original abstract for clarity and audience alignment without changing technical substance.
-
-### Lesson Extraction
-`POST /api/events/:id/memories/extract-lessons`
-
-After survey import, Claude extracts 5–10 structured lessons from aggregate data. Each lesson is embedded with Voyager AI and stored in `event_memories` for future scoring augmentation.
+`audience_fit` · `intel_alignment` · `technical_depth` · `strategic_value` · `partner_ecosystem_value` · `delivery_readiness`
 
 ---
 
-## Quality Gates
+## Navigation
 
-Three milestone gates (50% / 75% / 90%) with admin-defined deadlines. Each gate is evaluated on a 0–100 completeness score:
-
-| Score | Level | Behavior |
-|---|---|---|
-| 0–49 | Pass | No intervention |
-| 50–79 | Warn | Advisory shown, reviewer can proceed |
-| 80–100 | Block | Hard stop — status cannot advance |
-
-Gate deadlines, disclosure flags (roadmap/NDA language detection), and topic overlap conflict detection all run automatically.
+Events → Submissions → Review → Speakers → Competitive → Program → Memory → **Admin**
 
 ---
 
-## Submitter Portal
+## v2.1 — CFP Speaker Portal System
 
-`GET /submit/token/:token`
+### Phase 1 — Admin Tab
+- CFP open/closed toggle per event, submission deadline (date picker), invitation email config (heading, body, reply-to)
+- `cfp_config` + `cfp_invitations` schema
+- Single invite (name + email → branded magic link email via Resend)
+- Bulk invite (paste comma/newline/semicolon list)
+- Invitation tracker: Invited / Opened / Submitted status chips, Resend + Revoke per row
 
-A self-contained Intel-branded page accessible via magic link (72hr expiry). Submitters can view their score, coaching report, and update content fields. Reviewer is notified by email on every submitter update.
+### Phase 2 — Speaker CFP Portal (`/cfp/:slug/:token`)
+- Invite-only (token required), one submission per magic link
+- **Dual path:**
+  - **Form:** all one-pager fields — title, format, duration, abstract, Intel speakers, partner walk-ons, session flow (5 segments with individual durations), key topics, demos, featured Intel products, partner highlights, new launches
+  - **Upload:** drag-and-drop PPTX → server-side `adm-zip` parser extracts slide1.xml text nodes → pre-fills editable field preview → speaker reviews before submitting
+- Return visits show submission status + coaching report if generated
+- Confirmation email to speaker, reviewer notification to reply-to address
 
-Trigger magic link: `POST /api/submissions/:id/magic-link`
+### Phase 3 — Review Integration
+- `CFP` badge (Energy Blue chip) in submission table and detail panel
+- Full three-layer intelligence stack injected into scoring for CFP submissions
+- CFP source context: "speaker-direct proposal — score delivery_readiness accordingly"
+- Speaker column falls back: `speaker_names → intel_speakers → content_lead`
 
 ---
 
-## Email Notifications (Resend)
-
-| Trigger | Recipient |
-|---|---|
-| Submission scored | Content lead |
-| Status changed | Content lead |
-| Gate blocked | Content lead |
-| Magic link requested | Submitter |
-| Submitter updated submission | Reviewer (notification_email) |
-
-All Intel addresses follow `first.last@intel.com` format and are derived automatically from the content_lead field.
-
----
-
-## API Reference
+## Key API Routes
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/events` | List all events |
-| `POST` | `/api/events` | Create an event |
-| `PUT` | `/api/events/:id` | Update an event |
-| `POST` | `/api/events/generate-profile` | Generate AI event profile from raw context |
-| `GET` | `/api/submissions` | List submissions (filterable by `event_id`, `status`, `track`, `bu`) |
-| `POST` | `/api/submissions` | Create a submission |
-| `PUT` | `/api/submissions/:id` | Update a submission |
-| `POST` | `/api/submissions/:id/score` | Run AI scoring |
-| `POST` | `/api/submissions/:id/coach` | Generate coaching report |
-| `POST` | `/api/submissions/:id/enrich` | Run AI abstract enrichment |
-| `GET` | `/api/submissions/:id/gates` | Evaluate and return gate status |
-| `GET` | `/api/submissions/:id/conflicts` | Return detected topic conflicts |
-| `GET` | `/api/submissions/:id/versions` | Version history |
-| `POST` | `/api/submissions/:id/magic-link` | Send submitter portal magic link |
-| `GET` | `/api/events/:id/memories` | List memories for event |
-| `POST` | `/api/events/:id/memories` | Manually add a memory |
-| `PUT` | `/api/memories/:id/signal` | Upvote/downvote memory signal strength |
-| `DELETE` | `/api/memories/:id` | Delete a memory |
-| `POST` | `/api/events/:id/memories/import-survey` | Ingest post-event survey CSV |
-| `POST` | `/api/events/:id/memories/extract-lessons` | Extract AI lessons from survey data |
-| `GET` | `/api/events/:id/survey` | Survey aggregate stats + per-session breakdown |
-| `GET` | `/api/submissions/export` | CSV export for an event |
-| `GET` | `/api/speakers` | List speakers for an event |
-| `POST` | `/api/speakers` | Create a speaker (supports headshot upload) |
-| `PUT` | `/api/speakers/:id` | Update a speaker |
-| `DELETE` | `/api/speakers/:id` | Delete a speaker |
-| `GET` | `/api/speakers/:id/headshot` | Serve speaker headshot image |
-| `GET` | `/api/assets/:filename` | Serve static assets (fonts, logo) |
-| `GET` | `/submit/token/:token` | Submitter portal page |
-| `GET` | `/api/submit/verify/:token` | Verify magic link token |
-| `PUT` | `/api/submit/:token` | Submitter updates submission via portal |
-| `GET` | `/` | Serve the full frontend application |
+| POST | `/api/submissions/:id/score` | Queue scoring job → returns job_id |
+| POST | `/api/submissions/:id/coach` | Queue coaching job → returns job_id |
+| GET | `/api/jobs/:id` | Poll job status + result |
+| GET/PUT | `/api/events/:id/cfp/config` | CFP config CRUD |
+| GET | `/api/events/:id/cfp/invitations` | Invitation list with status |
+| POST | `/api/events/:id/cfp/invite` | Single invite (resend-aware) |
+| POST | `/api/events/:id/cfp/invite-bulk` | Bulk invite |
+| DELETE | `/api/cfp/invitations/:id` | Revoke invite |
+| GET | `/cfp/:slug/:token` | Speaker portal page |
+| POST | `/api/cfp/:token/submit` | Submit via form |
+| POST | `/api/cfp/:token/upload` | Upload + parse PPTX |
+| GET | `/api/assets/:filename` | Proxy to forge-os.ai assets |
+| GET | `/favicon.png` | Intel logo favicon (embedded base64) |
 
 ---
 
-## Design System
+## Repo Protocol
 
-The frontend implements the Intel design system exactly:
-
-- **Font:** Intel One Display (Light 300, Regular 400, Medium 500, Bold 700) — loaded from `/api/assets/`
-- **Colors:**
-  - Energy Blue `#00AAE8` — primary accent, CTAs, active states
-  - Cobalt `#000864` — sidebar, nav backgrounds
-  - Carbon Light `#EAEAEA` — page and card backgrounds
-  - Carbon Dark `#2E2F2F` — body text, secondary surfaces
-- **UI rules:** `border-radius: 0` on all elements, no shadows, borders instead of depth, square badges for status and scores
+- Always read README.md first (SSOT)
+- Always fetch current file + capture SHA before writing
+- Conventional commits: `feat:` `fix:` `refactor:` `style:`
+- Never give Brian code to run — commit directly
+- Write JS blocks to temp files, validate with `node --check` before committing
 
 ---
 
 ## Seed Data
 
-On first startup, if the `events` table is empty, the app seeds:
-
-**Intel Federal Summit 2026**
-- April 27–28, 2026 — Marriott Westfields, Chantilly, VA
-- 12 session slots (4 rooms × 3 blocks)
-- Full AI system prompt configured for federal/defense audience
-- 6 seed submissions across all content tracks (Agentic AI, Data Center/HPC, Edge & Embedded Systems, Commercial Client)
+Intel Federal Summit 2026 (event id=1), April 27-28 2026, Marriott Westfields Chantilly VA, 12 slots, 6 seed submissions across Agentic AI / Data Center / Edge / Commercial Client tracks.
 
 ---
 
-## Deployment
+## Known Constraints
 
-Deployed on Render as a single Node.js service. Auto-deploys on push to `main`.
-
-```bash
-npm start
-# → node server.js
-```
-
-No build step. No bundler. The frontend is served as `index.html`.
-
----
-
-## Repository Structure
-
-```
-├── server.js          # Express backend — all API routes, AI integrations, DB schema, gate engine
-├── index.html         # Complete frontend — HTML, CSS, and JS in one file
-├── package.json       # Dependencies
-├── V2_WHITEBOARD.md   # v2 planning document — phases, decisions, build checklist
-└── package-lock.json
-```
-
----
-
-## v2 Status
-
-| Phase | Status | Description |
-|---|---|---|
-| Phase 1 — Gates & Compliance | ✅ Complete | Gate evaluation engine, disclosure flags, conflict detection |
-| Phase 2 — Memory Brain | ✅ Complete | pgvector + Voyager AI, survey ingestion, memory-augmented scoring |
-| Phase 3 — Coaching & Portal | ✅ Complete | Coaching reports, magic links, submitter portal, Resend email |
-| Phase 4 — Program Intelligence | 🔲 Planned | Program health dashboard, KPI benchmarking, trend analytics |
-| Phase 4.5 — Competitive Intelligence | 🔲 Planned | Perplexity Sonar + Sonnet + Haiku agent stack, whitespace analysis |
-
-See `V2_WHITEBOARD.md` for full planning detail, decisions, and build checklist.
+- Render 30s HTTP timeout — solved via background job processor
+- Assets proxied to `forge-os.ai` — favicon served locally as embedded base64
+- No auth gate currently — PIN gate planned before client presentation, MS Entra ID TBD
+- Memory seeding: first-time events benefit from 4-6 manually added memories via Memory Browser before first scoring run
