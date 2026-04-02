@@ -612,7 +612,8 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 
 > **Phase 1 shipped** — `e21252d` (server) + `0dbe692` (UI)
 > **Phase 2 shipped** — `90ade68` (server) + `10c3819` (UI)
-> **Phase 3 shipped** — `edcd9b4` (server) + `ef306c7` (UI) — deployed to Render April 1, 2026 — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
+> **Phase 3 shipped** — `edcd9b4` (server) + `ef306c7` (UI) — deployed to Render April 1, 2026
+> **Phase 3 bug fix** — `c674789` — Memory Brain UI rewritten to eliminate JS quote escaping crashes — `90ade68` (server) + `10c3819` (UI) — deployed to Render April 1, 2026 — `e21252d` (server) + `0dbe692` (UI) — deployed to Render April 1, 2026
 
 ### Phase 1 — Quality Gates & Compliance
 - [x] Define gate field requirements and scoring weights
@@ -688,6 +689,13 @@ POST /api/submissions/:id/competitive/reframe → Run Stage 3 reframe on single 
 
 ---
 
+## Post-Ship Notes
+
+### Phase 3 Bug — Memory Brain UI Quote Escaping (resolved `c674789`)
+The Memory Brain UI was built with inline `onclick` attributes containing single-quoted string arguments inside single-quoted JS strings — e.g. `onclick="switchMemoryTab('browse')"` embedded inside `'...' +` concatenation. This caused a JS syntax error that crashed the entire app script, breaking all navigation. Fix: complete rewrite of the Memory Brain UI using DOM event listeners, `data-*` attributes, and HTML entities throughout. No inline `onclick` attributes remain.
+
+**Root cause lesson:** When building HTML strings in JS using single-quote delimiters, any `onclick`, `href`, or attribute value that itself contains single-quoted arguments will break the outer string. Always use DOM event listeners or data attributes when generating HTML with dynamic IDs or function arguments.
+
 ## North Star Metric
 
 > After three event cycles using v2, the average AI score of approved sessions should be measurably higher than the average score from the first cycle — and post-event survey session scores should follow.
@@ -697,5 +705,5 @@ The tool succeeds when the feedback loop closes:
 
 ---
 
-*Last updated: March 31, 2026*
+*Last updated: April 1, 2026*
 *Owner: Brian Morgan / Taylor*
