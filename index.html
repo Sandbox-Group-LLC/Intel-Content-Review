@@ -1376,88 +1376,82 @@ async function renderMemoryTab() {
   if (!el) return;
 
   if (memoryTab === 'browse') {
-    el.innerHTML = '<div style="font-size:12px;color:#666">Loading memories...</div>';
+    el.innerHTML = '<div style="color:#666;font-size:13px">Loading memories...</div>';
     var data = await api('GET', '/api/events/' + currentEventId + '/memories');
     if (!data.ok) { el.innerHTML = '<p style="color:#CC0000">Error loading memories.</p>'; return; }
     var memories = data.memories || [];
-
-    var catOpts = [['what_worked','What Worked'],['what_didnt','What Didn&#39;t'],['speaker_insight','Speaker Insight'],['topic_trend','Topic Trend'],['audience_signal','Audience Signal'],['kpi_outcome','KPI Outcome']];
-    var selHtml = '<select id="mem-cat" style="flex:0 0 160px">';
-    catOpts.forEach(function(o){ selHtml += '<option value="'+o[0]+'">'+o[1]+'</option>'; });
-    selHtml += '</select>';
-
-    var addForm = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA;margin-bottom:16px">' +
-      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">ADD MEMORY</div>' +
-      '<div style="display:flex;gap:8px;margin-bottom:8px">' + selHtml +
-      '<input id="mem-content" placeholder="Enter memory..." style="flex:1">' +
-      '<button class="btn-primary" id="btn-add-mem">Add</button></div></div>';
-
+    var parts = [];
+    parts.push('<div style="padding:16px;background:#fff;border:1px solid #EAEAEA;margin-bottom:16px">');
+    parts.push('<div style="font-weight:700;font-size:12px;text-transform:uppercase;margin-bottom:10px">ADD MEMORY</div>');
+    parts.push('<div style="display:flex;gap:8px;margin-bottom:8px">');
+    parts.push('<select id="mem-cat" style="flex:0 0 160px">');
+    parts.push('<option value="what_worked">What Worked</option>');
+    parts.push('<option value="what_didnt">What Didn&#39;t</option>');
+    parts.push('<option value="speaker_insight">Speaker Insight</option>');
+    parts.push('<option value="topic_trend">Topic Trend</option>');
+    parts.push('<option value="audience_signal">Audience Signal</option>');
+    parts.push('<option value="kpi_outcome">KPI Outcome</option>');
+    parts.push('</select><input id="mem-content" placeholder="Enter memory..." style="flex:1">');
+    parts.push('<button id="btn-add-mem" class="btn-primary">Add</button></div></div>');
     if (memories.length === 0) {
-      el.innerHTML = addForm + '<p style="color:#666;padding:16px 0">No memories yet. Import survey data or add manually.</p>';
-      var ab = document.getElementById('btn-add-mem'); if(ab) ab.onclick = addMemory;
+      parts.push('<p style="color:#666;padding:16px 0">No memories yet. Import survey data or add manually.</p>');
+      el.innerHTML = parts.join('');
+      var ab0 = el.querySelector('#btn-add-mem'); if (ab0) ab0.onclick = addMemory;
       return;
     }
-
     var catColors = { what_worked:'#007A3D', what_didnt:'#CC0000', speaker_insight:'#000864', topic_trend:'#00AAE8', audience_signal:'#B8860B', kpi_outcome:'#2E2F2F', manual:'#6B6B6B', auto_extracted:'#000864' };
-    var html = addForm + '<div style="margin-bottom:8px;font-size:12px;color:#666">' + memories.length + ' memories</div>';
-
+    parts.push('<div style="margin-bottom:8px;font-size:12px;color:#666">' + memories.length + ' memories</div>');
     memories.forEach(function(m) {
-      var catColor = catColors[m.category] || '#6B6B6B';
-      var signalPct = Math.round((m.signal_strength / 3.0) * 100);
-      html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px">' +
-        '<span style="background:'+catColor+';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;white-space:nowrap;margin-top:2px">'+(m.category||'').replace(/_/g,' ').toUpperCase()+'</span>' +
-        '<div style="flex:1;font-size:13px;color:#2E2F2F">'+escHtml(m.content)+'</div>' +
-        '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:80px">' +
-          '<div style="font-size:10px;color:#666">Signal</div>' +
-          '<div style="background:#EAEAEA;width:60px;height:6px"><div style="background:#00AAE8;width:'+signalPct+'%;height:100%"></div></div>' +
-          '<div style="display:flex;gap:4px">' +
-            '<button data-mid="'+m.id+'" data-dir="up" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9650;</button>' +
-            '<button data-mid="'+m.id+'" data-dir="down" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9660;</button>' +
-            '<button data-mid="'+m.id+'" data-action="delete" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px;color:#CC0000">&#10005;</button>' +
-          '</div></div></div>';
+      var cc = catColors[m.category] || '#6B6B6B';
+      var sp = Math.round((m.signal_strength / 3.0) * 100);
+      parts.push('<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px">');
+      parts.push('<span style="background:' + cc + ';color:#fff;font-size:10px;font-weight:700;padding:2px 8px;white-space:nowrap">' + (m.category||'').replace(/_/g,' ').toUpperCase() + '</span>');
+      parts.push('<div style="flex:1;font-size:13px">' + escHtml(m.content) + '</div>');
+      parts.push('<div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:80px">');
+      parts.push('<div style="font-size:10px;color:#666">Signal</div>');
+      parts.push('<div style="background:#EAEAEA;width:60px;height:6px"><div style="background:#00AAE8;width:' + sp + '%;height:100%"></div></div>');
+      parts.push('<div style="display:flex;gap:4px">');
+      parts.push('<button data-mid="' + m.id + '" data-dir="up" class="msb" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9650;</button>');
+      parts.push('<button data-mid="' + m.id + '" data-dir="down" class="msb" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px">&#9660;</button>');
+      parts.push('<button data-mid="' + m.id + '" data-action="del" class="mdb" style="background:none;border:1px solid #EAEAEA;padding:2px 6px;cursor:pointer;font-size:11px;color:#CC0000">&#10005;</button>');
+      parts.push('</div></div></div>');
     });
-
-    el.innerHTML = html;
-    var ab = document.getElementById('btn-add-mem'); if(ab) ab.onclick = addMemory;
-    el.querySelectorAll('[data-mid]').forEach(function(btn){
-      btn.onclick = function(){
-        var mid = parseInt(this.getAttribute('data-mid'));
-        var dir = this.getAttribute('data-dir');
-        var action = this.getAttribute('data-action');
-        if (action === 'delete') deleteMemory(mid);
-        else if (dir) signalMemory(mid, dir);
-      };
-    });
+    el.innerHTML = parts.join('');
+    var ab1 = el.querySelector('#btn-add-mem'); if (ab1) ab1.onclick = addMemory;
+    el.querySelectorAll('.msb').forEach(function(b) { b.onclick = function() { signalMemory(parseInt(this.dataset.mid), this.dataset.dir); }; });
+    el.querySelectorAll('.mdb').forEach(function(b) { b.onclick = function() { deleteMemory(parseInt(this.dataset.mid)); }; });
 
   } else if (memoryTab === 'survey') {
-    el.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #EAEAEA">' +
-      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">IMPORT POST-EVENT SURVEY</div>' +
-      '<p style="font-size:13px;color:#666;margin-bottom:16px">Upload a CSV export from your post-event survey platform. Column headers are auto-detected and mapped to Intel KPI fields.</p>' +
-      '<div style="margin-bottom:12px"><label style="font-weight:700;font-size:12px">Survey CSV File</label>' +
-      '<input type="file" id="survey-file" accept=".csv" style="display:block;margin-top:6px"></div>' +
-      '<button class="btn-primary" id="btn-import-survey">Import Survey Data</button>' +
-      '<div id="survey-import-result" style="margin-top:12px"></div>' +
-      '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #EAEAEA">' +
-        '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px">EXTRACT LESSONS FROM SURVEY</div>' +
-        '<p style="font-size:13px;color:#666;margin-bottom:12px">After importing, run AI lesson extraction to auto-generate memory entries.</p>' +
-        '<button class="btn-secondary" id="btn-extract-lessons">Extract Lessons with AI</button>' +
-        '<div id="lesson-extract-result" style="margin-top:8px"></div>' +
-      '</div><div id="survey-stats-container" style="margin-top:20px"></div></div>';
-    var ib = document.getElementById('btn-import-survey'); if(ib) ib.onclick = importSurvey;
-    var eb = document.getElementById('btn-extract-lessons'); if(eb) eb.onclick = extractLessons;
+    var sp2 = [];
+    sp2.push('<div style="padding:16px;background:#fff;border:1px solid #EAEAEA">');
+    sp2.push('<div style="font-weight:700;font-size:12px;text-transform:uppercase;margin-bottom:12px">IMPORT POST-EVENT SURVEY</div>');
+    sp2.push('<p style="font-size:13px;color:#666;margin-bottom:16px">Upload a CSV export. Column headers are auto-detected and mapped to Intel KPI fields.</p>');
+    sp2.push('<label style="font-weight:700;font-size:12px">Survey CSV File</label>');
+    sp2.push('<input type="file" id="survey-file" accept=".csv" style="display:block;margin-top:6px;margin-bottom:12px">');
+    sp2.push('<button id="btn-imp-sv" class="btn-primary">Import Survey Data</button>');
+    sp2.push('<div id="survey-import-result" style="margin-top:12px"></div>');
+    sp2.push('<div style="margin-top:20px;padding-top:16px;border-top:1px solid #EAEAEA">');
+    sp2.push('<div style="font-weight:700;font-size:12px;text-transform:uppercase;margin-bottom:8px">EXTRACT LESSONS FROM SURVEY</div>');
+    sp2.push('<p style="font-size:13px;color:#666;margin-bottom:12px">Run AI lesson extraction to generate memory entries from survey results.</p>');
+    sp2.push('<button id="btn-ext-ls" class="btn-secondary">Extract Lessons with AI</button>');
+    sp2.push('<div id="lesson-extract-result" style="margin-top:8px"></div>');
+    sp2.push('</div><div id="survey-stats-container" style="margin-top:20px"></div></div>');
+    el.innerHTML = sp2.join('');
+    var ib = el.querySelector('#btn-imp-sv'); if (ib) ib.onclick = importSurvey;
+    var eb = el.querySelector('#btn-ext-ls'); if (eb) eb.onclick = extractLessons;
     loadSurveyStats();
 
   } else if (memoryTab === 'speakers') {
-    var sdata = await api('GET', '/api/speakers?event_id=' + currentEventId);
-    var speakers = (sdata.speakers || []).filter(function(s){return s.full_name;});
-    if (speakers.length === 0) { el.innerHTML = '<p style="color:#666;padding:16px 0">No speaker history yet.</p>'; return; }
-    var html = '<div style="font-size:12px;color:#666;margin-bottom:12px">Speaker performance sourced from post-event surveys.</div>';
-    speakers.forEach(function(sp){
-      html += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;align-items:center;gap:16px">' +
-        '<div style="font-weight:700;font-size:14px;flex:1">'+escHtml(sp.full_name)+'</div>' +
-        '<div style="font-size:12px;color:#666">'+(sp.title||'')+(sp.company?' &middot; '+sp.company:'')+'</div></div>';
+    var sd = await api('GET', '/api/speakers?event_id=' + currentEventId);
+    var spkrs = (sd.speakers || []).filter(function(s) { return s.full_name; });
+    if (!spkrs.length) { el.innerHTML = '<p style="color:#666;padding:16px 0">No speaker history yet.</p>'; return; }
+    var sh = '<div style="font-size:12px;color:#666;margin-bottom:12px">Performance sourced from post-event surveys.</div>';
+    spkrs.forEach(function(sp) {
+      sh += '<div style="padding:12px;background:#fff;border:1px solid #EAEAEA;margin-bottom:6px;display:flex;gap:16px">' +
+        '<div style="font-weight:700;flex:1">' + escHtml(sp.full_name) + '</div>' +
+        '<div style="font-size:12px;color:#666">' + escHtml(sp.title||'') + '</div></div>';
     });
-    el.innerHTML = html;
+    el.innerHTML = sh;
   }
 }
 
