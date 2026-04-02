@@ -979,22 +979,58 @@ async function saveStatus(id, status) {
 
 async function scoreSubmission(id) {
   var panel = document.getElementById('slide-panel');
-  panel.innerHTML = '<h2>Scoring...</h2><div class="loading">Running AI alignment scoring...</div>';
   openPanel();
-  var r = await api('POST', '/api/submissions/' + id + '/score');
-  if (r.error) { panel.innerHTML = '<h2>Error</h2><div class="alert alert-error">' + r.error + '</div>'; return; }
-  var raw = r.scorecard || r.ai_score || r;
-  var normalized = {
-    overall_score: raw.overall_score || raw.overall || 0,
-    dimension_scores: raw.dimension_scores || raw.dimensions || {},
-    strengths: raw.strengths || [],
-    gaps: raw.gaps || [],
-    recommendation: raw.recommendation || '',
-    recommendation_rationale: raw.recommendation_rationale || raw.rationale || ''
-  };
-  var idx2 = allSubmissions.findIndex(function(x){return x.id===id;});
-  if (idx2>=0) allSubmissions[idx2].ai_score = normalized;
-  renderSubTable();
+
+  // Show live elapsed timer — scoring takes 20-40s
+  var scoreStart = Date.now();
+  var timerInterval = setInterval(function() {
+    var elapsed = Math.round((Date.now() - scoreStart) / 1000);
+    var timerEl = document.getElementById('score-timer');
+    if (timerEl) timerEl.textContent = elapsed + 's';
+  }, 1000);
+
+  panel.innerHTML = '<div style="padding:24px">' +
+    '<div style="font-weight:700;font-size:16px;color:#000864;margin-bottom:12px">Running AI Score</div>' +
+    '<div style="font-size:13px;color:#666;margin-bottom:16px">Analyzing against event goals, memory brain, and competitive landscape. This takes 20-40 seconds.</div>' +
+    '<div style="background:#EAEAEA;height:4px;position:relative;margin-bottom:12px">' +
+      '<div id="score-progress-bar" style="background:#00AAE8;height:100%;width:0%;transition:width 1s linear"></div>' +
+    '</div>' +
+    '<div style="font-size:12px;color:#666">Elapsed: <span id="score-timer">0</span>s</div>' +
+  '</div>';
+
+  // Animate progress bar
+  var progressInterval = setInterval(function() {
+    var bar = document.getElementById('score-progress-bar');
+    if (bar) {
+      var elapsed = (Date.now() - scoreStart) / 1000;
+      bar.style.width = Math.min(Math.round(elapsed / 45 * 90), 90) + '%';
+    }
+  }, 1000);
+
+  try {
+    var r = await api('POST', '/api/submissions/' + id + '/score');
+  } catch(fetchErr) {
+    r = { error: fetchErr.message };
+  }
+
+  clearInterval(timerInterval);
+  clearInterval(progressInterval);
+
+  // Always re-fetch from DB — score is saved server-side regardless of response parsing
+  try {
+    var freshData = await api('GET', '/api/submissions?event_id=' + currentEventId);
+    if (freshData.ok && freshData.submissions) {
+      allSubmissions = freshData.submissions.map(parseAiScore);
+      renderSubTable();
+    }
+  } catch(fe) {}
+
+  if (r && r.error && !r.ok) {
+    // Score may still have saved — show warning but load the submission
+    var warnEl = document.getElementById('slide-panel');
+    if (warnEl) warnEl.innerHTML += '<div style="padding:8px 24px;color:#B8860B;font-size:12px">Note: ' + r.error + ' — refreshing from database.</div>';
+  }
+
   viewSubmission(id);
 }
 
