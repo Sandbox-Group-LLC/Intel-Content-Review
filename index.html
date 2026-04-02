@@ -97,6 +97,7 @@ tr:hover td{background:#f9f9f9;}
     <a onclick="showSection('submissions')">Submissions</a>
     <a onclick="showSection('review')">Review</a>
     <a onclick="showSection('speakers')">Speakers</a>
+    <a onclick="showSection('program')">Program</a>
     <a onclick="showSection('memory')">Memory</a>
   </nav>
   <div class="event-selector">
@@ -126,6 +127,10 @@ tr:hover td{background:#f9f9f9;}
     <div id="section-speakers" class="section">
       <div id="speakers-content"></div>
     </div>
+    <!-- PROGRAM SECTION -->
+    <div id="section-program" class="section">
+      <div id="program-content"></div>
+    </div>
     <!-- MEMORY SECTION -->
     <div id="section-memory" class="section">
       <div id="memory-content"></div>
@@ -153,7 +158,7 @@ function showSection(name) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.getElementById('section-' + name).classList.add('active');
   document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
-    a.classList.toggle('active', ['events','submissions','review','speakers','memory'][i] === name);
+    a.classList.toggle('active', ['events','submissions','review','speakers','program','memory'][i] === name);
   });
   document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
   document.getElementById('topbar-action').innerHTML = '';
@@ -161,6 +166,7 @@ function showSection(name) {
   if (name === 'submissions') { renderSubmissions(); }
   if (name === 'review') { renderReview(); }
   if (name === 'speakers') { renderSpeakers(); addTopbarBtn('Add Speaker', () => showSpeakerForm()); }
+  if (name === 'program') { renderProgram(); }
   if (name === 'memory') { renderMemory(); }
 }
 
@@ -216,6 +222,7 @@ function onEventChange() {
   if (sect && sect.id === 'section-submissions') renderSubmissions();
   if (sect && sect.id === 'section-review') renderReview();
   if (sect && sect.id === 'section-speakers') renderSpeakers();
+  if (sect && sect.id === 'section-program') renderProgram();
   if (sect && sect.id === 'section-memory') renderMemory();
 }
 
@@ -1347,6 +1354,192 @@ window.showNewEventForm = showNewEventForm;
 window.switchPanelTab = switchPanelTab;
 window.showStep2 = showStep2;
 window.generateProfile = generateProfile;
+// ─── PROGRAM INTELLIGENCE UI ─────────────────────────────────────────────────
+
+async function renderProgram() {
+  var el = document.getElementById('program-content');
+  if (!currentEventId) {
+    el.innerHTML = '<p style="color:#666;padding:24px">Select an event to view program intelligence.</p>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">Loading program data...</div>';
+
+  try {
+    var phData = await api('GET', '/api/events/' + currentEventId + '/program-health');
+    var trendData = await api('GET', '/api/analytics/trends');
+    if (!phData.ok) { el.innerHTML = '<p style="color:#CC0000">Error loading program health data.</p>'; return; }
+
+    var ph = phData;
+    var evt = ph.event;
+    var sum = ph.summary;
+
+    // ── Summary cards row ──
+    var summaryCards = [
+      { label: 'Total Submissions', value: sum.total_submissions, sub: sum.scored + ' scored', color: '#000864' },
+      { label: 'Average Score', value: sum.avg_score !== null ? sum.avg_score : '—', sub: sum.avg_score !== null ? (sum.avg_score >= 70 ? 'On track' : 'Needs attention') : 'Not yet scored', color: sum.avg_score === null ? '#6B6B6B' : sum.avg_score >= 80 ? '#007A3D' : sum.avg_score >= 60 ? '#B8860B' : '#CC0000' },
+      { label: 'Approved', value: sum.approved, sub: 'of ' + sum.total_submissions + ' submissions', color: '#007A3D' },
+      { label: 'Slot Utilization', value: sum.slot_utilization + '%', sub: sum.total_submissions + ' of ' + evt.slot_count + ' slots', color: sum.slot_utilization >= 80 ? '#007A3D' : sum.slot_utilization >= 50 ? '#B8860B' : '#CC0000' },
+      { label: 'Disclosure Flags', value: sum.disclosure_flags, sub: sum.nda_flags + ' NDA required', color: sum.disclosure_flags > 0 ? '#CC0000' : '#007A3D' },
+      { label: 'Score Improving', value: sum.improving_submissions, sub: sum.declining_submissions + ' declining', color: '#00AAE8' }
+    ];
+
+    var html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px">';
+    summaryCards.forEach(function(c) {
+      html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px">' +
+        '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#666;margin-bottom:6px">' + c.label + '</div>' +
+        '<div style="font-size:28px;font-weight:700;color:' + c.color + '">' + c.value + '</div>' +
+        '<div style="font-size:11px;color:#666;margin-top:4px">' + c.sub + '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+
+    // ── Gate readiness timeline ──
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">GATE READINESS</div>';
+    var gateLabels = { gate_50: '50% Review', gate_75: '75% Review', gate_90: '90% Review' };
+    var gateDeadlines = { gate_50: evt.gate_50_deadline, gate_75: evt.gate_75_deadline, gate_90: evt.gate_90_deadline };
+    ['gate_50','gate_75','gate_90'].forEach(function(g) {
+      var gr = ph.gate_readiness[g] || { pass: 0, warn: 0, block: 0, total: 1 };
+      var total = gr.total || 1;
+      var passPct = Math.round((gr.pass / total) * 100);
+      var warnPct = Math.round((gr.warn / total) * 100);
+      var blockPct = Math.round((gr.block / total) * 100);
+      var deadline = gateDeadlines[g];
+      var daysUntil = null;
+      if (deadline) {
+        var diff = new Date(deadline) - new Date();
+        daysUntil = Math.ceil(diff / (1000 * 60 * 60 * 24));
+      }
+      html += '<div style="margin-bottom:14px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<span style="font-weight:700;font-size:13px">' + gateLabels[g] + '</span>' +
+          '<span style="font-size:12px;color:#666">' + (deadline ? deadline + (daysUntil !== null ? ' &mdash; ' + (daysUntil > 0 ? daysUntil + ' days remaining' : daysUntil === 0 ? 'Due today' : Math.abs(daysUntil) + ' days overdue') : '') : 'No deadline set') + '</span>' +
+        '</div>' +
+        '<div style="display:flex;height:20px;gap:2px">' +
+          '<div style="background:#007A3D;width:' + passPct + '%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700">' + (passPct > 10 ? passPct + '%' : '') + '</div>' +
+          '<div style="background:#B8860B;width:' + warnPct + '%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700">' + (warnPct > 10 ? warnPct + '%' : '') + '</div>' +
+          '<div style="background:#CC0000;width:' + blockPct + '%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700">' + (blockPct > 10 ? blockPct + '%' : '') + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:16px;margin-top:4px;font-size:11px;color:#666">' +
+          '<span style="color:#007A3D">&#9632; Pass: ' + gr.pass + '</span>' +
+          '<span style="color:#B8860B">&#9632; Warn: ' + gr.warn + '</span>' +
+          '<span style="color:#CC0000">&#9632; Block: ' + gr.block + '</span>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+
+    // ── Track balance ──
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">TRACK BALANCE</div>';
+    ph.tracks.forEach(function(t) {
+      var scoreColor = t.avg_score === null ? '#6B6B6B' : t.avg_score >= 80 ? '#007A3D' : t.avg_score >= 60 ? '#B8860B' : '#CC0000';
+      html += '<div style="display:grid;grid-template-columns:180px 1fr 80px 80px 80px;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #EAEAEA;font-size:13px">' +
+        '<div style="font-weight:700">' + t.track + '</div>' +
+        '<div style="background:#EAEAEA;height:8px"><div style="background:#00AAE8;width:' + Math.min(t.slot_fill_pct, 100) + '%;height:100%"></div></div>' +
+        '<div style="text-align:center;font-size:12px;color:#666">' + t.submissions + ' sub' + (t.submissions !== 1 ? 's' : '') + '</div>' +
+        '<div style="text-align:center"><span style="background:' + scoreColor + ';color:#fff;padding:2px 8px;font-size:11px;font-weight:700">' + (t.avg_score !== null ? t.avg_score : '—') + '</span></div>' +
+        '<div style="text-align:center;font-size:11px;color:#666">' + t.has_demo_pct + '% demo</div>' +
+      '</div>';
+    });
+    html += '</div>';
+
+    // ── Score distribution histogram ──
+    html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">SCORE DISTRIBUTION</div>';
+    var dist = ph.score_distribution;
+    var maxBucket = Math.max.apply(null, Object.values(dist).concat([1]));
+    html += '<div style="display:flex;align-items:flex-end;gap:8px;height:80px;margin-bottom:8px">';
+    Object.keys(dist).forEach(function(bucket) {
+      var count = dist[bucket];
+      var heightPct = Math.round((count / maxBucket) * 100);
+      var color = bucket.startsWith('8') || bucket.startsWith('9') ? '#007A3D' : bucket.startsWith('7') || bucket.startsWith('6') ? '#B8860B' : '#CC0000';
+      html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">' +
+        '<div style="font-size:11px;font-weight:700;color:' + color + '">' + (count > 0 ? count : '') + '</div>' +
+        '<div style="width:100%;background:' + (count > 0 ? color : '#EAEAEA') + ';height:' + Math.max(heightPct, count > 0 ? 8 : 4) + '%;min-height:4px"></div>' +
+        '<div style="font-size:10px;color:#666">' + bucket + '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+    html += '<div style="font-size:12px;color:#666">Overall average: <strong>' + (sum.avg_score !== null ? sum.avg_score + '/100' : 'Not yet scored') + '</strong> &mdash; ' + sum.scored + ' of ' + sum.total_submissions + ' submissions scored</div>';
+    html += '</div>';
+
+    // ── Speaker diversity ──
+    var div = ph.speaker_diversity;
+    var total = div.intel_only + div.with_partner;
+    if (total > 0) {
+      var partnerPct = Math.round((div.with_partner / total) * 100);
+      html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+      html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">SPEAKER DIVERSITY</div>';
+      html += '<div style="display:flex;height:24px;margin-bottom:8px">' +
+        '<div style="background:#000864;width:' + (100 - partnerPct) + '%;display:flex;align-items:center;padding:0 8px;font-size:11px;color:#fff;font-weight:700">Intel Only: ' + div.intel_only + '</div>' +
+        '<div style="background:#00AAE8;width:' + partnerPct + '%;display:flex;align-items:center;padding:0 8px;font-size:11px;color:#fff;font-weight:700">' + (partnerPct > 15 ? 'With Partner: ' + div.with_partner : '') + '</div>' +
+      '</div>';
+      html += '<div style="font-size:12px;color:#666">' + partnerPct + '% of sessions include partner or customer participation</div>';
+      html += '</div>';
+    }
+
+    // ── Cross-event trends ──
+    if (trendData.ok) {
+      html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+      html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:14px">CROSS-EVENT TRENDS</div>';
+
+      // Insight chips
+      if (trendData.insights && trendData.insights.length > 0) {
+        trendData.insights.forEach(function(ins) {
+          var bg = ins.type === 'positive' ? '#F0FAF5' : ins.type === 'negative' ? '#FFF0F0' : '#F5F5F5';
+          var border = ins.type === 'positive' ? '#007A3D' : ins.type === 'negative' ? '#CC0000' : '#EAEAEA';
+          var icon = ins.type === 'positive' ? '&#9650;' : ins.type === 'negative' ? '&#9660;' : '&#9632;';
+          html += '<div style="padding:8px 12px;background:' + bg + ';border-left:3px solid ' + border + ';margin-bottom:8px;font-size:13px">' +
+            '<span style="color:' + border + ';font-weight:700;margin-right:6px">' + icon + ' ' + ins.metric + '</span>' +
+            ins.text + '</div>';
+        });
+      }
+
+      // Event score trajectory table
+      if (trendData.events && trendData.events.length > 1) {
+        html += '<div style="margin-top:12px;font-size:12px">';
+        html += '<div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:8px;font-weight:700;color:#666;padding-bottom:6px;border-bottom:1px solid #EAEAEA;margin-bottom:8px">' +
+          '<div>Event</div><div style="text-align:center">Submissions</div><div style="text-align:center">Avg Score</div><div style="text-align:center">Demo %</div></div>';
+        trendData.events.forEach(function(e) {
+          var isCurrentEvent = String(e.id) === String(currentEventId);
+          html += '<div style="display:grid;grid-template-columns:1fr 80px 80px 80px;gap:8px;padding:6px 0;border-bottom:1px solid #EAEAEA;' + (isCurrentEvent ? 'background:#EEF6FB;margin:0 -12px;padding:6px 12px;' : '') + '">' +
+            '<div style="font-weight:' + (isCurrentEvent ? '700' : '400') + '">' + e.name + (isCurrentEvent ? ' <span style="font-size:10px;background:#00AAE8;color:#fff;padding:1px 6px">CURRENT</span>' : '') + '</div>' +
+            '<div style="text-align:center">' + e.total_submissions + '</div>' +
+            '<div style="text-align:center;font-weight:700;color:' + (e.avg_score === null ? '#6B6B6B' : e.avg_score >= 70 ? '#007A3D' : '#CC0000') + '">' + (e.avg_score !== null ? e.avg_score : '—') + '</div>' +
+            '<div style="text-align:center">' + e.demo_pct + '%</div>' +
+          '</div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+
+      // Memory insight cards
+      if (trendData.memory_cards && trendData.memory_cards.length > 0) {
+        html += '<div style="background:#fff;border:1px solid #EAEAEA;padding:16px;margin-bottom:16px">';
+        html += '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px">MEMORY BRAIN INSIGHTS</div>';
+        var catColors = { what_worked:'#007A3D', what_didnt:'#CC0000', topic_trend:'#00AAE8', audience_signal:'#B8860B' };
+        trendData.memory_cards.forEach(function(m) {
+          var catColor = catColors[m.category] || '#6B6B6B';
+          html += '<div style="padding:10px 12px;background:#f9f9f9;border-left:3px solid ' + catColor + ';margin-bottom:6px;font-size:12px">' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:4px">' +
+              '<span style="font-weight:700;color:' + catColor + '">' + (m.category||'').replace(/_/g,' ').toUpperCase() + '</span>' +
+              '<span style="color:#666;font-size:11px">' + (m.event_name || '') + '</span>' +
+            '</div>' +
+            escHtml(m.content) +
+          '</div>';
+        });
+        html += '</div>';
+      }
+    }
+
+    el.innerHTML = html;
+  } catch(err) {
+    el.innerHTML = '<p style="color:#CC0000">Error: ' + err.message + '</p>';
+  }
+}
+
+
 // ─── MEMORY BRAIN UI ─────────────────────────────────────────────────────────
 
 var memoryTab = 'browse';
