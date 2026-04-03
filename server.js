@@ -4,6 +4,7 @@ var axios = require('axios');
 var { neon } = require('@neondatabase/serverless');
 var { Resend } = require('resend');
 var AdmZip = require('adm-zip');
+var QRCode = require('qrcode');
 var crypto = require('crypto');
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY); }
@@ -356,6 +357,7 @@ async function ensureSchema() {
   // ── v2.1 PHASE 1: CFP schema ─────────────────────────────────────────────
   await ensureCFPSchema(sql);
   await ensureJobsSchema(sql);
+  await ensureSurveySchema(sql);
   try {
     await sql`CREATE TABLE IF NOT EXISTS magic_link_tokens (
       id SERIAL PRIMARY KEY, token TEXT UNIQUE NOT NULL,
@@ -2850,6 +2852,377 @@ app.get('/api/jobs/:id', async function(req, res) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+
+// ─── LIVE SESSION SURVEYS ─────────────────────────────────────────────────────
+
+// ── Schema ────────────────────────────────────────────────────────────────────
+async function ensureSurveySchema(sql) {
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS survey_configs (
+      id SERIAL PRIMARY KEY,
+      submission_id INTEGER UNIQUE REFERENCES submissions(id) ON DELETE CASCADE,
+      event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+      token TEXT UNIQUE NOT NULL,
+      enabled BOOLEAN DEFAULT true,
+      questions JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`;
+    console.log('[OK] survey_configs table');
+  } catch(e) { console.log('[SKIP] survey_configs:', e.message); }
+
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS survey_responses (
+      id SERIAL PRIMARY KEY,
+      survey_token TEXT REFERENCES survey_configs(token) ON DELETE CASCADE,
+      submission_id INTEGER REFERENCES submissions(id) ON DELETE CASCADE,
+      event_id INTEGER,
+      ratings JSONB,
+      open_feedback JSONB,
+      submitted_at TIMESTAMPTZ DEFAULT NOW(),
+      respondent_token TEXT
+    )`;
+    console.log('[OK] survey_responses table');
+  } catch(e) { console.log('[SKIP] survey_responses:', e.message); }
+}
+
+// ── Default survey questions ───────────────────────────────────────────────────
+function defaultQuestions() {
+  return [
+    { id: 'overall', type: 'rating', label: 'How would you rate this session overall?', scale: 5 },
+    { id: 'relevance', type: 'rating', label: 'How relevant was this content to your work?', scale: 5 },
+    { id: 'speaker', type: 'rating', label: 'How would you rate the speaker(s)?', scale: 5 },
+    { id: 'insight', type: 'text', label: 'What was the most valuable insight from this session?' },
+    { id: 'missing', type: 'text', label: 'What question wasn\'t answered that you wanted addressed?' }
+  ];
+}
+
+// ── Brain injection: process survey response into event_memories ──────────────
+async function injectSurveyIntoMemory(sql, surveyToken) {
+  try {
+    var responses = await sql`
+      SELECT sr.*, sc.submission_id, sc.event_id,
+             s.title, s.track, s.abstract
+      FROM survey_responses sr
+      JOIN survey_configs sc ON sc.token = sr.survey_token
+      JOIN submissions s ON s.id = sc.submission_id
+      WHERE sr.survey_token = ${surveyToken}
+    `;
+    if (!responses.length) return;
+
+    var sub = responses[0];
+    var allRatings = responses.map(function(r){ return r.ratings; });
+    var allFeedback = responses.map(function(r){ return r.open_feedback; });
+
+    // Average ratings
+    var ratingKeys = ['overall','relevance','speaker'];
+    var avgRatings = {};
+    ratingKeys.forEach(function(k) {
+      var vals = allRatings.map(function(r){ return r && r[k] ? Number(r[k]) : null; }).filter(function(v){ return v !== null; });
+      if (vals.length) avgRatings[k] = (vals.reduce(function(a,b){return a+b;},0) / vals.length).toFixed(1);
+    });
+
+    // Collect open text
+    var insights = allFeedback.map(function(f){ return f && f.insight ? f.insight : null; }).filter(Boolean);
+    var missing = allFeedback.map(function(f){ return f && f.missing ? f.missing : null; }).filter(Boolean);
+
+    var responseCount = responses.length;
+    var overallAvg = avgRatings.overall || 'N/A';
+
+    // Build memory content
+    var memoryContent = 'Session "' + sub.title + '" (track: ' + (sub.track||'unknown') + ') received ' +
+      responseCount + ' survey response' + (responseCount !== 1 ? 's' : '') + '. ' +
+      'Average ratings — overall: ' + overallAvg + '/5, relevance: ' + (avgRatings.relevance||'N/A') + '/5, speaker: ' + (avgRatings.speaker||'N/A') + '/5. ';
+
+    if (insights.length) {
+      memoryContent += 'Top insights cited: ' + insights.slice(0,3).join('; ') + '. ';
+    }
+    if (missing.length) {
+      memoryContent += 'Gaps attendees wanted addressed: ' + missing.slice(0,3).join('; ') + '.';
+    }
+
+    // Generate embedding and upsert memory
+    try {
+      var embedding = await generateEmbedding(memoryContent);
+      // Check if memory already exists for this submission
+      var existing = await sql`SELECT id FROM event_memories WHERE event_id = ${sub.event_id} AND content LIKE ${'%' + sub.title.slice(0,30) + '%audience_feedback%'}`;
+      if (existing.length) {
+        await sql`UPDATE event_memories SET content = ${memoryContent}, embedding = ${JSON.stringify(embedding)}, updated_at = NOW() WHERE id = ${existing[0].id}`;
+      } else {
+        await sql`INSERT INTO event_memories (event_id, content, category, embedding)
+          VALUES (${sub.event_id}, ${memoryContent}, 'audience_feedback', ${JSON.stringify(embedding)})`;
+      }
+      console.log('[Survey] Memory injected for submission', sub.submission_id, '—', responseCount, 'responses');
+    } catch(embErr) {
+      // Still save memory without embedding
+      await sql`INSERT INTO event_memories (event_id, content, category)
+        VALUES (${sub.event_id}, ${memoryContent}, 'audience_feedback')
+        ON CONFLICT DO NOTHING`;
+    }
+  } catch(e) {
+    console.error('[Survey] Brain injection error:', e.message);
+  }
+}
+
+// ── GET or create survey config for a submission ─────────────────────────────
+app.get('/api/submissions/:id/survey', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var result = await sql`
+      SELECT sc.*, s.title, s.track, s.content_lead,
+        (SELECT COUNT(*) FROM survey_responses WHERE submission_id = ${id}) as response_count
+      FROM survey_configs sc
+      JOIN submissions s ON s.id = sc.submission_id
+      WHERE sc.submission_id = ${id}
+    `;
+    if (!result.length) return res.json({ ok: true, config: null });
+    res.json({ ok: true, config: result[0] });
+  } catch(err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Create survey for a submission ───────────────────────────────────────────
+app.post('/api/submissions/:id/survey', async function(req, res) {
+  try {
+    var sql = getDb();
+    var id = req.params.id;
+    var sub = await sql`SELECT * FROM submissions WHERE id = ${id}`;
+    if (!sub.length) return res.status(404).json({ ok: false, error: 'Submission not found' });
+
+    var token = generateToken().slice(0, 16); // shorter = cleaner QR
+    var questions = req.body.questions || defaultQuestions();
+
+    var existing = await sql`SELECT * FROM survey_configs WHERE submission_id = ${id}`;
+    var config;
+    if (existing.length) {
+      config = existing[0];
+    } else {
+      var inserted = await sql`
+        INSERT INTO survey_configs (submission_id, event_id, token, questions)
+        VALUES (${id}, ${sub[0].event_id}, ${token}, ${JSON.stringify(questions)})
+        RETURNING *
+      `;
+      config = inserted[0];
+    }
+
+    var surveyUrl = APP_URL + '/survey/' + config.token;
+
+    // Generate QR code as base64 PNG
+    var qrDataUrl = await QRCode.toDataURL(surveyUrl, {
+      width: 400,
+      margin: 2,
+      color: { dark: '#000864', light: '#FFFFFF' }
+    });
+
+    res.json({ ok: true, config: config, survey_url: surveyUrl, qr_data_url: qrDataUrl });
+  } catch(err) {
+    console.error('[survey create]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── GET survey QR code (regenerate on demand) ────────────────────────────────
+app.get('/api/submissions/:id/survey/qr', async function(req, res) {
+  try {
+    var sql = getDb();
+    var config = await sql`SELECT * FROM survey_configs WHERE submission_id = ${req.params.id}`;
+    if (!config.length) return res.status(404).json({ ok: false, error: 'No survey configured' });
+    var surveyUrl = APP_URL + '/survey/' + config[0].token;
+    var qrDataUrl = await QRCode.toDataURL(surveyUrl, {
+      width: 400, margin: 2,
+      color: { dark: '#000864', light: '#FFFFFF' }
+    });
+    res.json({ ok: true, qr_data_url: qrDataUrl, survey_url: surveyUrl, response_count: config[0].response_count || 0 });
+  } catch(err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── GET survey responses for a submission ─────────────────────────────────────
+app.get('/api/submissions/:id/survey/responses', async function(req, res) {
+  try {
+    var sql = getDb();
+    var responses = await sql`
+      SELECT sr.*, sc.questions
+      FROM survey_responses sr
+      JOIN survey_configs sc ON sc.token = sr.survey_token
+      WHERE sr.submission_id = ${req.params.id}
+      ORDER BY sr.submitted_at DESC
+    `;
+    res.json({ ok: true, responses: responses, count: responses.length });
+  } catch(err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Public survey page ────────────────────────────────────────────────────────
+app.get('/survey/:token', async function(req, res) {
+  try {
+    var sql = getDb();
+    var result = await sql`
+      SELECT sc.*, s.title, s.track, s.content_lead, s.intel_speakers,
+             e.name as event_name
+      FROM survey_configs sc
+      JOIN submissions s ON s.id = sc.submission_id
+      JOIN events e ON e.id = sc.event_id
+      WHERE sc.token = ${req.params.token} AND sc.enabled = true
+    `;
+    if (!result.length) return res.send(buildSurveyErrorPage('This survey link is no longer active.'));
+    res.send(buildSurveyPage(result[0]));
+  } catch(err) {
+    res.send(buildSurveyErrorPage('Something went wrong. Please try again.'));
+  }
+});
+
+// ── Submit survey response ────────────────────────────────────────────────────
+app.post('/api/survey/:token/submit', async function(req, res) {
+  try {
+    var sql = getDb();
+    var token = req.params.token;
+    var config = await sql`SELECT * FROM survey_configs WHERE token = ${token} AND enabled = true`;
+    if (!config.length) return res.status(404).json({ ok: false, error: 'Survey not found' });
+
+    var respondentToken = generateToken().slice(0, 12);
+    await sql`
+      INSERT INTO survey_responses (survey_token, submission_id, event_id, ratings, open_feedback, respondent_token)
+      VALUES (${token}, ${config[0].submission_id}, ${config[0].event_id},
+              ${JSON.stringify(req.body.ratings||{})},
+              ${JSON.stringify(req.body.open_feedback||{})},
+              ${respondentToken})
+    `;
+
+    // Inject into memory brain async (don't block response)
+    setImmediate(function() {
+      getDb().then(function(sql) {
+        injectSurveyIntoMemory(sql, token).catch(function(){});
+      }).catch(function(){});
+    });
+
+    res.json({ ok: true, message: 'Thank you for your feedback.' });
+  } catch(err) {
+    console.error('[survey submit]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Survey page HTML builder ──────────────────────────────────────────────────
+function buildSurveyErrorPage(msg) {
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Survey</title>' +
+    '<style>body{font-family:Arial,sans-serif;background:#EAEAEA;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh}' +
+    '.card{background:#fff;padding:32px;max-width:400px;text-align:center;border:1px solid #EAEAEA}' +
+    'h2{color:#CC0000;margin:0 0 12px}p{color:#666;font-size:14px}</style></head>' +
+    '<body><div class="card"><h2>Survey Unavailable</h2><p>' + escHtmlServer(msg) + '</p></div></body></html>';
+}
+
+function buildSurveyPage(cfg) {
+  var questions = cfg.questions;
+  if (typeof questions === 'string') { try { questions = JSON.parse(questions); } catch(e) { questions = defaultQuestions(); } }
+  if (!questions || !questions.length) questions = defaultQuestions();
+
+  var speakerName = cfg.intel_speakers || cfg.content_lead || '';
+  var css = [
+    '*{box-sizing:border-box;border-radius:0;margin:0;padding:0}',
+    'body{font-family:Arial,sans-serif;background:#EAEAEA;color:#2E2F2F;min-height:100vh}',
+    'header{background:#000864;padding:14px 20px;display:flex;align-items:center;justify-content:space-between}',
+    'header span{color:#fff;font-weight:700;font-size:15px}',
+    '.container{max-width:560px;margin:24px auto;padding:0 16px}',
+    '.card{background:#fff;border:1px solid #EAEAEA;padding:20px;margin-bottom:12px}',
+    '.session-title{font-size:17px;font-weight:700;color:#000864;margin-bottom:4px}',
+    '.session-meta{font-size:12px;color:#666}',
+    'h3{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;color:#2E2F2F}',
+    '.question{margin-bottom:20px}',
+    '.question label{font-size:14px;font-weight:700;display:block;margin-bottom:10px;color:#2E2F2F;line-height:1.4}',
+    '.stars{display:flex;gap:8px}',
+    '.star{width:44px;height:44px;border:2px solid #EAEAEA;background:#fff;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;transition:all .15s}',
+    '.star.active{background:#000864;border-color:#000864;color:#fff}',
+    '.star:hover{border-color:#00AAE8}',
+    'textarea{width:100%;border:1px solid #2E2F2F;padding:10px;font-size:14px;font-family:inherit;resize:vertical;min-height:80px}',
+    '.btn-submit{width:100%;background:#00AAE8;color:#fff;border:none;padding:16px;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:8px}',
+    '.btn-submit:disabled{background:#EAEAEA;color:#999;cursor:not-allowed}',
+    '#thank-you{display:none;text-align:center;padding:32px 20px}',
+    '#thank-you h2{color:#000864;font-size:22px;margin-bottom:8px}',
+    '#thank-you p{color:#666;font-size:14px}'
+  ].join('\n');
+
+  // Build question HTML
+  var questionsHtml = questions.map(function(q) {
+    if (q.type === 'rating') {
+      var stars = '';
+      for (var i = 1; i <= (q.scale||5); i++) {
+        stars += '<button type="button" class="star" data-q="' + q.id + '" data-val="' + i + '" onclick="setRating(\'' + q.id + '\',' + i + ')">' + i + '</button>';
+      }
+      return '<div class="question">' +
+        '<label>' + escHtmlServer(q.label) + '</label>' +
+        '<div class="stars" id="stars-' + q.id + '">' + stars + '</div>' +
+        '<input type="hidden" id="rating-' + q.id + '" value="">' +
+      '</div>';
+    } else {
+      return '<div class="question">' +
+        '<label>' + escHtmlServer(q.label) + '</label>' +
+        '<textarea id="text-' + q.id + '" placeholder="Your response..."></textarea>' +
+      '</div>';
+    }
+  }).join('');
+
+  var ratingIds = questions.filter(function(q){return q.type==='rating';}).map(function(q){return q.id;});
+  var textIds = questions.filter(function(q){return q.type==='text';}).map(function(q){return q.id;});
+
+  var js = 'var TOKEN=' + JSON.stringify(cfg.token) + ';' +
+    'var ratings={};' +
+    'function setRating(qId,val){' +
+      'ratings[qId]=val;' +
+      'document.querySelectorAll(".star[data-q=\'"+qId+"\']").forEach(function(s){' +
+        's.classList.toggle("active", Number(s.getAttribute("data-val"))<=val);' +
+      '});' +
+      'document.getElementById("rating-"+qId).value=val;' +
+    '}' +
+    'async function submitSurvey(){' +
+      'var btn=document.getElementById("btn-submit");' +
+      'btn.disabled=true;btn.textContent="Submitting...";' +
+      'var openFeedback={};' +
+      JSON.stringify(textIds) + '.forEach(function(id){' +
+        'var el=document.getElementById("text-"+id);' +
+        'if(el&&el.value.trim())openFeedback[id]=el.value.trim();' +
+      '});' +
+      'try{' +
+        'var r=await fetch("/api/survey/"+TOKEN+"/submit",{' +
+          'method:"POST",' +
+          'headers:{"Content-Type":"application/json"},' +
+          'body:JSON.stringify({ratings:ratings,open_feedback:openFeedback})' +
+        '});' +
+        'var data=await r.json();' +
+        'if(data.ok){' +
+          'document.getElementById("survey-form").style.display="none";' +
+          'document.getElementById("thank-you").style.display="block";' +
+        '}else{btn.disabled=false;btn.textContent="Submit Feedback";}' +
+      '}catch(e){btn.disabled=false;btn.textContent="Submit Feedback";}' +
+    '}';
+
+  return '<!DOCTYPE html><html><head>' +
+    '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<link rel="icon" type="image/png" href="/favicon.png">' +
+    '<title>' + escHtmlServer(cfg.event_name) + ' — Session Feedback</title>' +
+    '<style>' + css + '</style></head><body>' +
+    '<header><img src="/api/assets/Logo.png" alt="Intel" style="height:24px"><span>' + escHtmlServer(cfg.event_name) + '</span></header>' +
+    '<div class="container">' +
+      '<div class="card">' +
+        '<div class="session-title">' + escHtmlServer(cfg.title) + '</div>' +
+        '<div class="session-meta">' + (cfg.track ? escHtmlServer(cfg.track) : '') + (speakerName ? ' &mdash; ' + escHtmlServer(speakerName) : '') + '</div>' +
+      '</div>' +
+      '<div class="card" id="survey-form">' +
+        '<h3>Session Feedback</h3>' +
+        questionsHtml +
+        '<button class="btn-submit" id="btn-submit" onclick="submitSurvey()">Submit Feedback</button>' +
+      '</div>' +
+      '<div class="card" id="thank-you">' +
+        '<h2>Thank you.</h2>' +
+        '<p>Your feedback has been recorded and will help shape future sessions.</p>' +
+      '</div>' +
+    '</div>' +
+    '<script>' + js + '</scr' + 'ipt></body></html>';
+}
 
 
 // ─── PHASE 4: PROGRAM INTELLIGENCE ──────────────────────────────────────────
