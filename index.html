@@ -98,11 +98,11 @@ tr:hover td{background:#f9f9f9;}
   <div class="logo"><img src="/api/assets/Logo.png" alt="Intel"></div>
   <nav>
     <a class="active" onclick="showSection('events')">Events</a>
-    <a onclick="showSection('submissions')">Submissions</a>
-    <a onclick="showSection('review')">Review</a>
     <a onclick="showSection('speakers')">Speakers</a>
-    <a onclick="showSection('competitive')">Competitive</a>
+    <a onclick="showSection('submissions')">Submissions</a>
     <a onclick="showSection('program')">Program</a>
+    <a onclick="showSection('review')">Review</a>
+    <a onclick="showSection('competitive')">Competitive</a>
     <a onclick="showSection('memory')">Memory</a>
     <a onclick="showSection('admin')">Admin</a>
   </nav>
@@ -177,7 +177,7 @@ function showSection(name) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.getElementById('section-' + name).classList.add('active');
   document.querySelectorAll('#sidebar nav a').forEach(function(a,i){
-    a.classList.toggle('active', ['events','submissions','review','speakers','competitive','program','memory','admin'][i] === name);
+    a.classList.toggle('active', ['events','speakers','submissions','program','review','competitive','memory','admin'][i] === name);
   });
   document.getElementById('page-title').textContent = name.charAt(0).toUpperCase() + name.slice(1);
   document.getElementById('topbar-action').innerHTML = '';
