@@ -765,6 +765,10 @@ async function viewSubmission(id) {
     '<div id="gate-checklist-container" style="margin-top:16px"></div>' +
     '<div id="conflict-container" style="margin-top:8px"></div>' +
     '<div id="coaching-container" style="margin-top:8px"></div>' +
+    '<div style="margin-top:16px;border-top:1px solid #EAEAEA;padding-top:16px">' +
+      '<div style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">SESSION SURVEY</div>' +
+      '<div id="survey-container"></div>' +
+    '</div>' +
     '<div id="version-container" style="margin-top:8px"></div>' +
     '<div id="action-buttons" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
       '<button class="btn-primary" id="btn-run-score">Run AI Score</button>' +
@@ -1685,6 +1689,153 @@ async function renderAdmin() {
   }
 }
 
+
+
+// ─── SURVEY UI ────────────────────────────────────────────────────────────────
+
+async function loadSurveyPanel(id) {
+  var el = document.getElementById('survey-container');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:12px;color:#666">Loading survey...</div>';
+
+  try {
+    var r = await api('GET', '/api/submissions/' + id + '/survey');
+    if (!r.ok) { el.innerHTML = ''; return; }
+
+    if (!r.config) {
+      // No survey yet — show create button
+      el.innerHTML =
+        '<div style="font-size:13px;color:#666;margin-bottom:10px">No survey created yet for this session.</div>' +
+        '<button class="btn-secondary" id="btn-create-survey" style="font-size:12px;padding:8px 16px">Generate Survey + QR Code</button>' +
+        '<div id="survey-msg" style="font-size:12px;margin-top:8px"></div>';
+      document.getElementById('btn-create-survey').onclick = function() { createSurvey(id); };
+    } else {
+      renderSurveyPanel(id, r.config);
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:12px;color:#666">Survey unavailable.</div>';
+  }
+}
+
+async function createSurvey(id) {
+  var btn = document.getElementById('btn-create-survey');
+  var msg = document.getElementById('survey-msg');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating...'; }
+  var r = await api('POST', '/api/submissions/' + id + '/survey', {});
+  if (r.ok) {
+    renderSurveyPanel(id, r.config, r.qr_data_url, r.survey_url);
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = 'Generate Survey + QR Code'; }
+    if (msg) { msg.style.color = '#CC0000'; msg.textContent = 'Error: ' + (r.error||'Failed'); }
+  }
+}
+
+async function renderSurveyPanel(id, config, qrDataUrl, surveyUrl) {
+  var el = document.getElementById('survey-container');
+  if (!el) return;
+
+  // Fetch QR if not passed in
+  if (!qrDataUrl) {
+    try {
+      var qr = await api('GET', '/api/submissions/' + id + '/survey/qr');
+      if (qr.ok) { qrDataUrl = qr.qr_data_url; surveyUrl = qr.survey_url; }
+    } catch(e) {}
+  }
+
+  // Fetch response count
+  var responseCount = 0;
+  try {
+    var resp = await api('GET', '/api/submissions/' + id + '/survey/responses');
+    if (resp.ok) responseCount = resp.count || 0;
+  } catch(e) {}
+
+  var html = '<div style="display:grid;grid-template-columns:160px 1fr;gap:16px;align-items:start">';
+
+  // QR code
+  if (qrDataUrl) {
+    html += '<div style="text-align:center">' +
+      '<img src="' + qrDataUrl + '" style="width:140px;height:140px;display:block;border:1px solid #EAEAEA">' +
+      '<a href="' + escHtml(surveyUrl||'') + '" target="_blank" style="font-size:10px;color:#00AAE8;word-break:break-all;display:block;margin-top:4px">View survey</a>' +
+      '<a id="btn-dl-qr" href="' + qrDataUrl + '" download="survey-qr.png" style="display:inline-block;margin-top:6px;font-size:11px;color:#666;text-decoration:underline">Download QR</a>' +
+    '</div>';
+  } else {
+    html += '<div style="width:140px;height:140px;background:#EAEAEA;display:flex;align-items:center;justify-content:center;font-size:11px;color:#666">QR unavailable</div>';
+  }
+
+  // Stats + controls
+  html += '<div>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">' +
+      '<div style="font-size:24px;font-weight:700;color:#000864">' + responseCount + '</div>' +
+      '<div style="font-size:12px;color:#666">response' + (responseCount !== 1 ? 's' : '') + ' received</div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:#666;margin-bottom:10px;word-break:break-all">' + escHtml(surveyUrl||'') + '</div>' +
+    (responseCount > 0 ?
+      '<button class="btn-secondary" onclick="viewSurveyResponses(' + id + ')" style="font-size:11px;padding:6px 12px;margin-right:6px">View Responses</button>' : '') +
+    '<button class="btn-secondary" onclick="loadSurveyPanel(' + id + ')" style="font-size:11px;padding:6px 12px">Refresh</button>' +
+  '</div>';
+
+  html += '</div>';
+
+  // Instructions
+  html += '<div style="margin-top:12px;padding:10px;background:#EEF6FB;border:1px solid #00AAE8;font-size:12px;color:#444">' +
+    'Drop this QR code on the last slide of the presentation. Attendees scan it to leave instant feedback — responses feed directly into the Memory Brain.' +
+  '</div>';
+
+  el.innerHTML = html;
+}
+
+async function viewSurveyResponses(id) {
+  var el = document.getElementById('survey-container');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:12px;color:#666">Loading responses...</div>';
+
+  var r = await api('GET', '/api/submissions/' + id + '/survey/responses');
+  if (!r.ok || !r.responses.length) {
+    el.innerHTML = '<div style="font-size:12px;color:#666">No responses yet.</div>' +
+      '<button class="btn-secondary" onclick="loadSurveyPanel(' + id + ')" style="font-size:11px;padding:6px 12px;margin-top:8px">Back</button>';
+    return;
+  }
+
+  // Compute averages
+  var ratingKeys = ['overall','relevance','speaker'];
+  var avgs = {};
+  ratingKeys.forEach(function(k) {
+    var vals = r.responses.map(function(resp){ return resp.ratings && resp.ratings[k] ? Number(resp.ratings[k]) : null; }).filter(function(v){return v!==null;});
+    if (vals.length) avgs[k] = (vals.reduce(function(a,b){return a+b;},0)/vals.length).toFixed(1);
+  });
+
+  var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+    '<div style="font-weight:700;font-size:13px">' + r.count + ' Response' + (r.count!==1?'s':'') + '</div>' +
+    '<button class="btn-secondary" onclick="loadSurveyPanel(' + id + ')" style="font-size:11px;padding:4px 10px">Back</button>' +
+  '</div>';
+
+  // Avg rating chips
+  html += '<div style="display:flex;gap:8px;margin-bottom:14px">';
+  ratingKeys.forEach(function(k) {
+    if (avgs[k]) {
+      var color = Number(avgs[k]) >= 4 ? '#007A3D' : Number(avgs[k]) >= 3 ? '#B8860B' : '#CC0000';
+      html += '<div style="padding:6px 12px;border:1px solid ' + color + ';font-size:12px">' +
+        '<strong style="color:' + color + '">' + avgs[k] + '/5</strong> ' + k + '</div>';
+    }
+  });
+  html += '</div>';
+
+  // Open text responses
+  var textKeys = ['insight','missing'];
+  textKeys.forEach(function(k) {
+    var answers = r.responses.map(function(resp){ return resp.open_feedback && resp.open_feedback[k] ? resp.open_feedback[k] : null; }).filter(Boolean);
+    if (answers.length) {
+      var label = k === 'insight' ? 'Most Valuable Insights' : 'Gaps Attendees Wanted Addressed';
+      html += '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#666;margin-bottom:6px">' + label + '</div>';
+      answers.forEach(function(a) {
+        html += '<div style="padding:8px;background:#f9f9f9;border-left:3px solid #00AAE8;margin-bottom:4px;font-size:13px;color:#444">' + escHtml(a) + '</div>';
+      });
+      html += '</div>';
+    }
+  });
+
+  el.innerHTML = html;
+}
 
 // ─── COMPETITIVE INTELLIGENCE UI ─────────────────────────────────────────────
 
